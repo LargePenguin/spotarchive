@@ -119,6 +119,13 @@ Step "Installing Spotarchive and its Python dependencies (including SomeDL)"
 Invoke-Checked $VenvPython -m pip install --upgrade --quiet pip
 Invoke-Checked $VenvPython -m pip install --upgrade --editable "$ProjectDir[$extras]"
 
+# Never overwrites an existing configuration.
+$Config = Join-Path $ProjectDir "spotarchive.toml"
+if (-not (Test-Path $Config)) {
+    Copy-Item (Join-Path $ProjectDir "spotarchive.example.toml") $Config
+    Step "Created the configuration file $Config"
+}
+
 if (-not $NoBrowser) {
     Step "Installing the Chromium browser for the Spotify login"
     & $VenvPython -m playwright install chromium
