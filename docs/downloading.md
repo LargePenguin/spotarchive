@@ -10,7 +10,7 @@ spotarchive -fnd           # fetch the previous selection, then download
 
 You need to have [fetched](fetching.md) the playlists first, and the backend has to be installed (see [SomeDL](backends.md#somedl)). Downloading itself doesn't talk to Spotify, so it works without a login once the setlists exist.
 
-Plain `spotarchive` downloads too, right after fetching.
+Plain `spotarchive` downloads too, right after fetching, and then [fixes the metadata](metadata.md). The backend and its settings (audio format, folder structure) are set in the [configuration file](configuration.md#backendsname).
 
 ## What gets downloaded
 
@@ -27,7 +27,7 @@ Every playlist that is currently selected and has been fetched is processed in t
 
 With SomeDL, its own colored output shows each song's search, metadata and download progress. Backends that don't print anything get a progress bar instead.
 
-Songs end up directly in the playlist folder, named the way the backend names them. SomeDL uses `Artist - Song.mp3`, with the artist and title it found on YouTube Music, which can differ slightly from Spotify's.
+Songs end up directly in the playlist folder, named the way the backend names them. SomeDL uses `Artist - Song.mp3`, with the artist and title it found on YouTube Music, which can differ slightly from Spotify's. With SomeDL's [`flat = false`](configuration.md#backendssomedl) they go into subfolders of the playlist folder instead, following SomeDL's own output template.
 
 ```text
 data/
@@ -46,7 +46,7 @@ A song that appears twice in a playlist is downloaded once.
 Before downloading, Spotarchive checks each song of the setlist against the playlist folder and skips it when either:
 
 - the download record (`.downloads.json`, see below) lists a file for it that still exists, or
-- an audio file in the folder is named `Artist - Song` after it (ignoring case, and with characters that aren't allowed in file names replaced by `_`). This catches files that were there before Spotarchive kept a record, or that you put there yourself. The artist can be the first artist or all of them joined with `, `, ` & ` or `; `.
+- an audio file in the folder is named `Artist - Song` after it (ignoring case, and with characters that aren't allowed in file names replaced by `_`). This catches files that were there before Spotarchive kept a record, or that you put there yourself. The artist can be the first artist or all of them joined with `, `, ` & ` or `; `. Files in subfolders count too (except in folders whose name starts with `.`).
 
 So running `spotarchive --download` again only fetches what's new since last time, plus anything that failed or that you deleted.
 
@@ -54,7 +54,7 @@ Songs removed from a Spotify playlist are not deleted from its folder.
 
 ### The `.downloads.json` record
 
-Because backends name files after what *they* found, the file name alone can't always tell which setlist row a file belongs to. Each playlist folder therefore keeps a small record, `.downloads.json`, mapping every downloaded song (by its Spotify link) to its files:
+Because backends name files after what *they* found, the file name alone can't always tell which setlist row a file belongs to. Each playlist folder therefore keeps a small record, `.downloads.json`, mapping every downloaded song (by its Spotify link) to its files and, once its [metadata was fixed](metadata.md#what-gets-recorded), who tagged it:
 
 ```json
 {
@@ -63,7 +63,8 @@ Because backends name files after what *they* found, the file name alone can't a
     "https://open.spotify.com/track/...": {
       "label": "Example Artist - Example Song",
       "backend": "somedl",
-      "files": ["Example Artist - Example Song.mp3"]
+      "files": ["Example Artist - Example Song.mp3"],
+      "tagged": "setlist"
     }
   }
 }

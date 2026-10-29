@@ -21,7 +21,7 @@
 Archiver for Spotify and YouTube Music: cache your playlists' metadata, then legally source the songs through a swappable download backend.
 
 > [!WARNING]
-> Early development: Spotify login, playlist fetching, downloading and the install script work; metadata cleanup and updates are not implemented yet.
+> Early development: Spotify login, playlist fetching, downloading, metadata cleanup, the configuration file and the install script work; updates are not implemented yet.
 
 ## Features
 
@@ -29,6 +29,8 @@ Archiver for Spotify and YouTube Music: cache your playlists' metadata, then leg
 - Per-playlist `setlist.csv` metadata caches
 - Pluggable download backend (default: [SomeDL](https://github.com/ChemistryGull/SomeDL))
 - Smart downloading that skips songs you already have
+- Metadata cleanup, from the download helper or from Spotify's metadata
+- A single configuration file (`spotarchive.toml`)
 - Linux and Windows support
 
 Spotarchive only reads playlist *metadata* from Spotify; it never downloads audio from Spotify.
