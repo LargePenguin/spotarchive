@@ -19,7 +19,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 # The default download backend. It can also be installed on its own (e.g. pipx).
-somedl = ["somedl>=1.7"]
+# yt-dlp[default,deno]: the YouTube challenge solver and a Deno binary to run it;
+# without them YouTube downloads may fail with HTTP 403.
+somedl = ["somedl>=1.7", "yt-dlp[default,deno]"]
 
 [project.scripts]
 spotarchive = "spotarchive.cli:main"
