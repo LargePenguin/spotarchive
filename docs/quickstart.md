@@ -1,18 +1,18 @@
 # Quickstart
 
 > [!WARNING]
-> Spotarchive is still being built. Everything on this page works today.
+> Spotarchive is still in early development. If you encounter any problems, please open an issue.
 
 ## Legal note
 
-Spotarchive never acquires music from Spotify. The only data taken from Spotify is information about the contents of your playlists. Audio is sourced through a download backend by legal means.
+Spotarchive never acquires music from Spotify. The only data taken from Spotify is information about the contents of your playlists. Audio is sourced through a download backend of your choice (currently only SomeDL is implemented; please feel free to request/implement other backends and open a PR)
 
 ## Requirements
 
 - Python 3.10 or newer
 - Linux or Windows
 - A web browser for the login step
-- [SomeDL](https://github.com/ChemistryGull/SomeDL) (the default download backend) and [FFmpeg](https://ffmpeg.org/)
+- [SomeDL](https://github.com/ChemistryGull/SomeDL) (the default download backend) and [FFmpeg](https://ffmpeg.org/). Both should be fetched by the included install scripts.
 
 ## 1. Install
 
@@ -73,6 +73,10 @@ spotarchive --login
 ```
 
 A browser window opens at Spotify's login page. Sign in; once Spotify forwards you to the web player, Spotarchive closes the window by itself, captures the session and caches it in the data folder. Running plain `spotarchive` starts this step automatically if there is no working login. Never share or commit the session file. Details: [Authentication](authentication.md).
+
+
+> [!NOTE]
+> Spotarchive does not directly capture or save your credentials. Your session info (stored in `data_dir/session.json`) is as important as credentials, so please treat the file as though it did contain raw credentials. Do not upload it; do not include it in any issues; never check it into source control.
 
 ## 3. Fetch your playlists
 
