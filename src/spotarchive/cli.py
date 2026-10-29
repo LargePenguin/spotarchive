@@ -8,6 +8,8 @@ from pathlib import Path
 import requests
 
 from spotarchive import __version__, ui
+from spotarchive.backends import BackendUnavailable, DownloadBackend, get_backend
+from spotarchive.download import PlaylistDownload, download_playlist, selected_folders
 from spotarchive.fetch import fetch_setlists, update_selection
 from spotarchive.session import DEFAULT_DATA_DIR, SessionError, SessionStore
 from spotarchive.spotify.auth import (
@@ -32,15 +34,20 @@ def build_parser() -> argparse.ArgumentParser:
         prog="spotarchive",
         description=(
             "Cache metadata about your Spotify playlists into per-playlist "
-            "setlist.csv files. No audio is ever taken from Spotify."
+            "setlist.csv files, then source the songs legally through a download "
+            "backend. No audio is ever taken from Spotify."
         ),
-        epilog="With no options: log in if needed, then fetch.",
+        epilog="With no options: log in if needed, fetch, then download.",
     )
     parser.add_argument("-l", "--login", action="store_true", help="log in to Spotify in a browser window")
     parser.add_argument("-f", "--fetch", action="store_true", help="choose playlists and rebuild their setlist.csv files")
     parser.add_argument(
         "-n", "--noselect", action="store_true",
         help="with --fetch: skip the selection and reuse the previous one (-fn)",
+    )
+    parser.add_argument(
+        "-d", "--download", action="store_true",
+        help="download the songs of the fetched setlists that aren't there yet",
     )
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     return parser
@@ -143,6 +150,80 @@ def run_fetch(store: SessionStore, data_dir: Path, noselect: bool) -> None:
         raise CliError(f"{failed} of {len(results)} playlists couldn't be fetched.")
 
 
+def make_backend() -> DownloadBackend:
+    return get_backend()
+
+
+def run_download(store: SessionStore, data_dir: Path) -> None:
+    folders = selected_folders(store, data_dir)
+    if not folders:
+        raise CliError("No playlists have been fetched yet; run `spotarchive --fetch` first.")
+    backend = make_backend()
+    backend.check()
+
+    failed_songs = unfetched = 0
+    for name, folder in folders:
+        try:
+            if backend.shows_own_output:
+                result = _download_showing_backend(backend, name, folder)
+            else:
+                result = _download_with_progress(backend, name, folder)
+        except FileNotFoundError as exc:
+            unfetched += 1
+            ui.error(f"{name}: {exc}")
+            continue
+        failed_songs += len(result.failed)
+        summary = f"{name}: {result.downloaded} downloaded, {result.already_present} already there"
+        if result.failed:
+            ui.warn(f"{summary}, {len(result.failed)} failed")
+        else:
+            ui.ok(summary)
+
+    problems = []
+    if failed_songs:
+        problems.append(
+            f"{failed_songs} songs couldn't be downloaded; run `spotarchive --download` again to retry them."
+        )
+    if unfetched:
+        problems.append(f"{unfetched} playlists have no setlist; run `spotarchive --fetch` first.")
+    if problems:
+        raise CliError(" ".join(problems))
+
+
+def _download_showing_backend(backend: DownloadBackend, name: str, folder: Path) -> PlaylistDownload:
+    ui.info(f"{name}: checking which songs are missing...")
+
+    def on_start(song, i, n):
+        ui.info(f"[{i}/{n}] {song.label}")
+
+    def on_done(song, files, error):
+        if error:
+            ui.warn(f"{song.label}: {error}")
+
+    return download_playlist(backend, name, folder, on_start, on_done)
+
+
+def _download_with_progress(backend: DownloadBackend, name: str, folder: Path) -> PlaylistDownload:
+    failures = []
+    with ui.progress() as bar:
+        task = bar.add_task(name, total=None)
+
+        def on_start(song, i, n):
+            bar.update(task, completed=i - 1, total=n)
+
+        def on_done(song, files, error):
+            bar.advance(task)
+            if error:
+                failures.append(f"{song.label}: {error}")
+
+        result = download_playlist(backend, name, folder, on_start, on_done)
+        attempted = result.downloaded + len(result.failed)
+        bar.update(task, completed=attempted, total=attempted)
+    for failure in failures:
+        ui.warn(failure)
+    return result
+
+
 def main(argv: list[str] | None = None, data_dir: Path = DEFAULT_DATA_DIR) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -155,9 +236,14 @@ def main(argv: list[str] | None = None, data_dir: Path = DEFAULT_DATA_DIR) -> in
             run_login(store)
         if args.fetch:
             run_fetch(store, data_dir, args.noselect)
-        if not (args.login or args.fetch):
+        if args.download:
+            run_download(store, data_dir)
+        if not (args.login or args.fetch or args.download):
             ensure_login(store)
             run_fetch(store, data_dir, noselect=False)
+            # With nothing selected, fetching has already said so.
+            if selected_folders(store, data_dir):
+                run_download(store, data_dir)
     except KeyboardInterrupt:
         ui.warn("Cancelled.")
         return 130
@@ -167,7 +253,7 @@ def main(argv: list[str] | None = None, data_dir: Path = DEFAULT_DATA_DIR) -> in
     except RateLimited as exc:
         ui.error(rate_limit_message(exc))
         return 1
-    except (AuthError, SessionError, SpotifyApiError, CliError) as exc:
+    except (AuthError, BackendUnavailable, SessionError, SpotifyApiError, CliError) as exc:
         ui.error(str(exc))
         return 1
     except requests.RequestException as exc:

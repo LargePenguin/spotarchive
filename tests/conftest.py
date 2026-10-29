@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from spotarchive.backends import DownloadBackend, DownloadFailed
 from spotarchive.spotify.client import PATHFINDER_URL
 
 
@@ -113,3 +114,32 @@ def http():
 @pytest.fixture
 def tokens():
     return FakeTokens()
+
+
+class FakeBackend(DownloadBackend):
+    """Writes a dummy file per song instead of downloading anything."""
+
+    name = "fake"
+    audio_extensions = frozenset({".mp3"})
+
+    def __init__(self, failing=(), unavailable=None):
+        self.failing = set(failing)
+        self.unavailable = unavailable
+        self.requested = []
+
+    def check(self):
+        if self.unavailable:
+            raise self.unavailable
+
+    def download(self, song, folder):
+        self.requested.append(song.name)
+        if song.name in self.failing:
+            raise DownloadFailed("not found")
+        path = folder / f"YT {song.label}.mp3"
+        path.write_bytes(b"fake audio")
+        return [path]
+
+
+@pytest.fixture
+def backend():
+    return FakeBackend()
