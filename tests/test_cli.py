@@ -1,6 +1,10 @@
+import json
+
 import pytest
 
 from spotarchive import cli, ui
+from spotarchive.backends import BackendUnavailable
+from spotarchive.download import RECORD_FILENAME
 from spotarchive.session import PlaylistState, SessionStore, SpotifySession
 from spotarchive.setlist import read_setlist
 from spotarchive.spotify.auth import LoginRequired
@@ -42,6 +46,13 @@ def logged_in(tmp_path):
     store.spotify = SpotifySession(cookies=[], user_agent="dummy-agent", access_token="dummy-token")
     store.save()
     return tmp_path
+
+
+@pytest.fixture(autouse=True)
+def fake_backend(backend, monkeypatch):
+    # Tests never run a real download helper.
+    monkeypatch.setattr(cli, "make_backend", lambda: backend)
+    return backend
 
 
 @pytest.fixture
@@ -202,3 +213,87 @@ def test_rate_limit_doesnt_trigger_relogin(logged_in, fake_client, monkeypatch):
     monkeypatch.setattr(cli, "interactive_login", lambda *a, **kw: pytest.fail("should not log in"))
     fake_client.current_user = rate_limited
     assert cli.main([], data_dir=logged_in) == 1
+
+
+def test_default_run_downloads_after_fetching(logged_in, fake_client, fake_backend, monkeypatch):
+    choose(monkeypatch, ["p1"])
+    assert cli.main([], data_dir=logged_in) == 0
+    assert fake_backend.requested == ["Song A", "Song B"]
+    assert (logged_in / "Road Trip" / "YT Fake Artist - Song A.mp3").exists()
+
+
+def test_download_skips_songs_already_there(logged_in, fake_client, fake_backend, monkeypatch):
+    choose(monkeypatch, ["p1", "p2"])
+    cli.main(["-fd"], data_dir=logged_in)
+    assert fake_backend.requested == ["Song A", "Song B", "Song C"]
+
+    fake_backend.requested.clear()
+    (logged_in / "Road Trip" / "YT Fake Artist - Song B.mp3").unlink()
+    assert cli.main(["-d"], data_dir=logged_in) == 0
+    assert fake_backend.requested == ["Song B"]
+
+
+def test_download_doesnt_need_spotify(logged_in, fake_client, fake_backend, monkeypatch):
+    choose(monkeypatch, ["p2"])
+    cli.main(["-f"], data_dir=logged_in)
+    monkeypatch.setattr(cli, "make_client", lambda store: pytest.fail("should not talk to Spotify"))
+    assert cli.main(["--download"], data_dir=logged_in) == 0
+    record = json.loads((logged_in / "Focus_Work" / RECORD_FILENAME).read_text(encoding="utf-8"))
+    assert [s["files"] for s in record["songs"].values()] == [["YT Song C.mp3"]]
+
+
+def test_failed_song_doesnt_stop_others(logged_in, fake_client, fake_backend, monkeypatch, capsys):
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    fake_backend.failing = {"Song A"}
+    assert cli.main(["-d"], data_dir=logged_in) == 1
+    assert fake_backend.requested == ["Song A", "Song B"]
+    assert "1 songs couldn't be downloaded" in capsys.readouterr().out
+
+    fake_backend.failing = set()
+    fake_backend.requested.clear()
+    assert cli.main(["-d"], data_dir=logged_in) == 0
+    assert fake_backend.requested == ["Song A"]
+
+
+def test_download_before_fetch_fails(logged_in, capsys):
+    assert cli.main(["-d"], data_dir=logged_in) == 1
+    assert "--fetch" in capsys.readouterr().out
+
+
+def test_download_reports_missing_setlist(logged_in, fake_client, fake_backend, monkeypatch, capsys):
+    choose(monkeypatch, ["p1", "p2"])
+    cli.main(["-f"], data_dir=logged_in)
+    (logged_in / "Road Trip" / "setlist.csv").unlink()
+    assert cli.main(["-d"], data_dir=logged_in) == 1
+    assert fake_backend.requested == ["Song C"]
+    assert "1 playlists have no setlist" in capsys.readouterr().out
+
+
+def test_unavailable_backend_is_reported(logged_in, fake_client, fake_backend, monkeypatch, capsys):
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    fake_backend.unavailable = BackendUnavailable("SomeDL isn't installed.")
+    assert cli.main(["-d"], data_dir=logged_in) == 1
+    assert "SomeDL isn't installed." in capsys.readouterr().out
+    assert fake_backend.requested == []
+
+
+def test_backend_warnings_dont_stop_downloads(logged_in, fake_client, fake_backend, monkeypatch, capsys):
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    monkeypatch.setattr(fake_backend, "warnings", lambda: ["Deno isn't installed."])
+    assert cli.main(["-d"], data_dir=logged_in) == 0
+    assert "Deno isn't installed." in capsys.readouterr().out
+    assert fake_backend.requested == ["Song A", "Song B"]
+
+
+def test_backend_with_own_output_gets_a_line_per_song(logged_in, fake_client, fake_backend, monkeypatch, capsys):
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    fake_backend.shows_own_output = True
+    fake_backend.failing = {"Song B"}
+    assert cli.main(["-d"], data_dir=logged_in) == 1
+    out = capsys.readouterr().out
+    assert "[1/2] Fake Artist - Song A" in out
+    assert "Fake Artist - Song B: not found" in out

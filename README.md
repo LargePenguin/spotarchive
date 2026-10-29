@@ -21,7 +21,7 @@
 Archiver for Spotify and YouTube Music: cache your playlists' metadata, then legally source the songs through a swappable download backend.
 
 > [!WARNING]
-> Early development: Spotify login and playlist fetching work; downloading is not implemented yet.
+> Early development: Spotify login, playlist fetching, downloading and the install script work; metadata cleanup and updates are not implemented yet.
 
 ## Features
 
@@ -35,4 +35,11 @@ Spotarchive only reads playlist *metadata* from Spotify; it never downloads audi
 
 ## Quick start
 
-See the [quickstart guide](docs/quickstart.md) and the [documentation index](docs/README.md).
+```bash
+# Linux
+curl -fsSL https://raw.githubusercontent.com/LargePenguin/spotarchive/main/install.sh | bash
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/LargePenguin/spotarchive/main/install.ps1 | iex
+```
+
+Then run `spotarchive`. See the [quickstart guide](docs/quickstart.md) and the [documentation index](docs/README.md).
