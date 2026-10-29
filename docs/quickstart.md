@@ -1,7 +1,7 @@
 # Quickstart
 
 > [!WARNING]
-> Spotarchive is still being built. Everything below works today; only the update check of the all-in-one run is planned.
+> Spotarchive is still being built. Everything on this page works today.
 
 ## Legal note
 
@@ -104,7 +104,9 @@ Gives the downloaded songs proper tags (title, artists, album, ...), from the do
 spotarchive
 ```
 
-Logs in if needed, then fetches (asking which playlists), downloads and fixes the metadata. Checking for updates first is planned.
+Checks GitHub for a newer version first and asks before installing it. Then it logs in if needed, fetches (asking which playlists), downloads and fixes the metadata.
+
+To update at any time, run `spotarchive --update` (`-u`). Details: [Updating](updating.md).
 
 ## Next steps
 

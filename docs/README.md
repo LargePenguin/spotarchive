@@ -1,7 +1,7 @@
 # Spotarchive documentation
 
 > [!NOTE]
-> Spotarchive is in early development. Installing, logging in, fetching playlists, downloading, metadata cleanup and the configuration file work; updates are still planned.
+> Spotarchive is in early development. Installing, updating, logging in, fetching playlists, downloading, metadata cleanup and the configuration file work.
 
 ## Contents
 
@@ -12,3 +12,4 @@
 - [Download backends](backends.md) — installing SomeDL, how it is run, writing a new backend
 - [Metadata cleanup](metadata.md) — fixing the songs' tags from the download helper or the setlist
 - [Configuration](configuration.md) — `spotarchive.toml`: download folder, backend, metadata source and backend settings
+- [Updating](updating.md) — `--update`, the update check of a plain run, and failed updates
