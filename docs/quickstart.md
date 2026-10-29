@@ -1,7 +1,7 @@
 # Quickstart
 
 > [!WARNING]
-> Spotarchive is still being built. Steps 1–4 work today; metadata cleanup (`--meta`), the all-in-one run's update and metadata steps and the install script are planned.
+> Spotarchive is still being built. Steps 1–4 and the install script work today; metadata cleanup (`--meta`) and the all-in-one run's update and metadata steps are planned.
 
 ## Legal note
 
@@ -16,7 +16,35 @@ Spotarchive never acquires music from Spotify. The only data taken from Spotify 
 
 ## 1. Install
 
-A single-command install script will fetch dependencies and initialize the project. *(Planned; not available yet.)* Until then, install from a clone:
+You need Python and git. Then run one command.
+
+**Linux:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LargePenguin/spotarchive/main/install.sh | bash
+```
+
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/LargePenguin/spotarchive/main/install.ps1 | iex
+```
+
+The install script:
+
+1. clones Spotarchive into `~/spotarchive` (`%USERPROFILE%\spotarchive` on Windows), or pulls the latest version if the clone is already there;
+2. creates a virtualenv `.venv` in that folder and installs Spotarchive with all its Python dependencies, including SomeDL, the default [download backend](backends.md);
+3. downloads the Chromium browser used for [logging in](authentication.md#which-browser-is-used);
+4. installs [FFmpeg](https://ffmpeg.org/), which SomeDL needs, if it's missing. It asks first, then uses your package manager (apt, dnf, pacman, zypper or apk) or winget on Windows;
+5. puts the `spotarchive` command on your `PATH`. On Linux it's linked into `~/.local/bin`. On Windows it goes into `%LOCALAPPDATA%\spotarchive\bin`, which is added to your user `PATH`, so open a new terminal afterwards.
+
+Running it again repairs or updates the install. If you already have a clone, run `./install.sh` or `powershell -ExecutionPolicy Bypass -File install.ps1` inside it to install that clone instead.
+
+> [!TIP]
+> Options: `--dir`/`-Dir` (where to clone), `--bin-dir`/`-BinDir` (where the command goes), `--no-browser`/`-NoBrowser` (skip Chromium if you use Chrome or Edge), `--no-ffmpeg`/`-NoFfmpeg`, `--no-link`/`-NoLink`, `--dev`/`-Dev` (test dependencies) and `--yes`/`-Yes` (don't ask). When piping the script, pass Linux options as `bash -s -- --no-browser`. On Windows, set `SPOTARCHIVE_DIR` or `SPOTARCHIVE_BIN_DIR` beforehand instead.
+
+<details>
+<summary>Installing by hand</summary>
 
 ```bash
 git clone https://github.com/LargePenguin/spotarchive.git
@@ -31,7 +59,11 @@ pip install -e ".[somedl]"
 python -m playwright install chromium
 ```
 
-The first command installs Spotarchive together with SomeDL, the default [download backend](backends.md). SomeDL also needs [FFmpeg](https://ffmpeg.org/) on your `PATH`; see [installing SomeDL](backends.md#installing-it). The last command downloads the browser used for logging in. You can skip it if Google Chrome or Microsoft Edge is installed; see [which browser is used](authentication.md#which-browser-is-used).
+The first command installs Spotarchive together with SomeDL. SomeDL also needs [FFmpeg](https://ffmpeg.org/) on your `PATH`; see [installing SomeDL](backends.md#installing-it). The last command downloads the browser used for logging in. You can skip it if Google Chrome or Microsoft Edge is installed.
+
+</details>
+
+Spotarchive keeps its data in a `data/` folder inside the folder you run it from, so run it from wherever your music should go.
 
 ## 2. Log in
 

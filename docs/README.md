@@ -1,7 +1,7 @@
 # Spotarchive documentation
 
 > [!NOTE]
-> Spotarchive is in early development. Logging in, fetching playlists and downloading work; metadata cleanup, updates, the configuration file and the install script are still planned.
+> Spotarchive is in early development. Installing, logging in, fetching playlists and downloading work; metadata cleanup, updates and the configuration file are still planned.
 
 ## Contents
 

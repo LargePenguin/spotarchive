@@ -9,13 +9,13 @@ Spotarchive is a cross-platform (Linux and Windows) Python CLI that caches metad
 
 ## Status
 
-Steps 1–4 of the development plan are done: docs scaffolding, the Spotify features (browser login, playlist selection, `setlist.csv` caching) and downloading through the backend interface (SomeDL). Metadata cleanup, updates, the config file and the install script don't exist yet. Update this file (especially **Commands** and **Architecture**) as code lands — don't leave it describing things that don't exist, and don't invent commands before they work.
+Steps 1–4 of the development plan are done: docs scaffolding, the Spotify features (browser login, playlist selection, `setlist.csv` caching) and downloading through the backend interface (SomeDL), plus the install scripts from step 5. Metadata cleanup, updates and the config file don't exist yet. Update this file (especially **Commands** and **Architecture**) as code lands — don't leave it describing things that don't exist, and don't invent commands before they work.
 
 Development plan order: (1) `CLAUDE.md`, (2) `docs/`, minimal `README.md` (ASCII-art name + status badges) and quickstart, (3) Spotify features, (4) download-backend features, (5) metadata cleanup, setup script and config file.
 
 ## Commands
 
-Setup (until the install script exists), from the repo root with the virtualenv active:
+User install: `./install.sh` (Linux) or `install.ps1` (Windows), also usable as `curl ... | bash` / `irm ... | iex`. **Don't run either from a worktree** (they `pip install -e` into `.venv`; both refuse a worktree). Development setup, from the repo root with the virtualenv active:
 
 ```bash
 pip install -e ".[dev,somedl]"          # package + pytest + SomeDL (default backend; also needs ffmpeg)
@@ -35,7 +35,7 @@ spotarchive -V | --version
 spotarchive -h | --help
 ```
 
-Still planned (see `.tmp/spec.md`): `-m | --meta` (metadata cleanup, combinable as `-dm`), `-u | --update` (compare against GitHub and update in place). Plain `spotarchive` will then also check for updates first (prompting before installing) and fix metadata after downloading. A single-command install script will set up dependencies and the project.
+Still planned (see `.tmp/spec.md`): `-m | --meta` (metadata cleanup, combinable as `-dm`), `-u | --update` (compare against GitHub and update in place). Plain `spotarchive` will then also check for updates first (prompting before installing) and fix metadata after downloading.
 
 ## Architecture
 
@@ -51,6 +51,7 @@ Package in `src/spotarchive/` (setuptools, `pyproject.toml`; console script `spo
 - **`backends/`** — the download-backend interface. `base.py`: `DownloadBackend` (class attrs `name`, `shows_own_output`, `audio_extensions`; `check()` raises `BackendUnavailable`, `download(song, folder) -> list[Path]` raises `DownloadFailed`) and `Song` (a parsed setlist row; `key` = Spotify URL, else name/artists/album). `__init__.py`: `BACKENDS` registry + `get_backend(name, **options)`. Keep all helper-specific code in its own module; nothing outside `backends/` may know about SomeDL.
 - **`backends/somedl.py`** — runs `somedl --here --skip-file-check [--format F] -- "First Artist - Title"` once per song with `cwd` = playlist folder and inherited stdio (its output is the progress display). `--here` forces flat `{artist} - {song}` names regardless of the user's SomeDL config. SomeDL exits 0 even on failure, so success = a new/modified audio file (mtime diff of the folder). Queries equal to SomeDL subcommands (`import`, `web`, ...) are refused. Executable looked up next to `sys.executable`, then on PATH; `check()` also requires `ffmpeg`.
 - **`download.py`** — smart downloading. Per playlist folder, `.downloads.json` maps song key -> files (helpers name files after what *they* found, so names can't be matched reliably). A song is present if a recorded file exists or an audio file's stem matches `Artist - Song` (normalized; first/all artists); name matches are written back to the record. Pending songs go to the backend one at a time; the record is saved after each song; failures are collected, not recorded, and don't stop the rest. Downloading only reads `session.json` + setlists, never Spotify.
+- **`install.sh` / `install.ps1`** (repo root) — single-command install. Use the checkout they sit in, otherwise clone into `~/spotarchive` (or `git pull --ff-only` an existing clone). They create `.venv`, `pip install -e ".[somedl]"`, run `playwright install chromium`, and install FFmpeg if it's missing, asking first (apt/dnf/pacman/zypper/apk with sudo; winget `Gyan.FFmpeg`). Then they expose the command: a symlink in `~/.local/bin` on Linux, or a `spotarchive.cmd` launcher in `%LOCALAPPDATA%\spotarchive\bin` added to the user PATH on Windows (not `.venv\Scripts`, which would shadow python/pip). Idempotent; the options are documented in `docs/quickstart.md`. `install.ps1` must not call `exit`, since that closes the window under `iex`. Keep the two scripts' behavior and options in sync.
 - **`ui.py`** — rich console output (ASCII markers so legacy Windows consoles work), questionary checkbox, progress bars.
 
 Planned:

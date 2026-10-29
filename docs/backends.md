@@ -8,7 +8,7 @@ Spotarchive doesn't download anything itself. It hands each song of a setlist to
 
 ### Installing it
 
-Install it into the same environment as Spotarchive:
+The [install script](quickstart.md#1-install) installs SomeDL and FFmpeg for you. To install it by hand, put it into the same environment as Spotarchive:
 
 ```bash
 pip install -e ".[somedl]"     # from a clone of Spotarchive
