@@ -9,7 +9,7 @@ Spotarchive is a cross-platform (Linux and Windows) Python CLI that caches metad
 
 ## Status
 
-The repo is at the start of the development plan: only `LICENSE` and `README.md` exist. Update this file (especially **Commands** and **Architecture**) as code lands — don't leave it describing things that don't exist, and don't invent commands before they work.
+The repo is at the start of the development plan: only `LICENSE`, `README.md`, `.gitignore`, `CLAUDE.md` and the `docs/` stubs (`docs/README.md`, `docs/quickstart.md`) exist; no code yet. Update this file (especially **Commands** and **Architecture**) as code lands — don't leave it describing things that don't exist, and don't invent commands before they work.
 
 Development plan order: (1) `CLAUDE.md`, (2) `docs/`, minimal `README.md` (ASCII-art name + status badges) and quickstart, (3) Spotify features, (4) download-backend features, (5) metadata cleanup, setup script and config file.
 
