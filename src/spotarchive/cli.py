@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import requests
 
-from spotarchive import __version__, ui
+from spotarchive import __version__, ui, update
 from spotarchive.backends import BackendUnavailable, DownloadBackend, get_backend
 from spotarchive.download import PlaylistDownload, download_playlist, selected_folders
 from spotarchive.fetch import fetch_setlists, update_selection
@@ -37,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
             "setlist.csv files, then source the songs legally through a download "
             "backend. No audio is ever taken from Spotify."
         ),
-        epilog="With no options: log in if needed, fetch, then download.",
+        epilog="With no options: check for updates, log in if needed, fetch, then download.",
     )
     parser.add_argument("-l", "--login", action="store_true", help="log in to Spotify in a browser window")
     parser.add_argument("-f", "--fetch", action="store_true", help="choose playlists and rebuild their setlist.csv files")
@@ -48,6 +51,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-d", "--download", action="store_true",
         help="download the songs of the fetched setlists that aren't there yet",
+    )
+    parser.add_argument(
+        "-u", "--update", action="store_true",
+        help="update Spotarchive to the latest version on GitHub",
     )
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     return parser
@@ -226,13 +233,87 @@ def _download_with_progress(backend: DownloadBackend, name: str, folder: Path) -
     return result
 
 
+def run_update() -> None:
+    try:
+        latest = update.latest_version()
+    except update.UpdateError as exc:
+        raise CliError(f"Couldn't check for updates: {exc}") from exc
+    if not update.is_newer(latest, __version__):
+        ui.ok(f"Spotarchive {__version__} is up to date.")
+        return
+    _install_update(latest)
+
+
+def _install_update(latest: str) -> None:
+    root = update.project_root()
+    if root is None:
+        raise CliError(
+            f"Spotarchive {latest} is available, but this install isn't a git clone, so it can't update "
+            f"itself. Run the install script to update: {update.REPO_URL}#quick-start"
+        )
+    ui.info(f"Updating Spotarchive {__version__} -> {latest} in {root}...")
+    try:
+        installed = update.install_update(root)
+    except update.UpdateError as exc:
+        raise CliError(f"Update failed: {exc}") from exc
+    ui.ok(f"Updated Spotarchive to {installed}.")
+
+
+def check_for_update() -> bool:
+    """The update check of a plain run; returns whether an update was installed.
+
+    Never fails the run: a failed check or update carries on with the
+    installed version.
+    """
+    if update.skip_check_requested():
+        return False
+    try:
+        latest = update.latest_version(timeout=5)
+    except update.UpdateError as exc:
+        ui.warn(f"Couldn't check for updates ({exc}); continuing.")
+        return False
+    if not update.is_newer(latest, __version__):
+        return False
+    ui.info(f"Spotarchive {latest} is available (you have {__version__}).")
+    if update.project_root() is None:
+        ui.warn(f"This install can't update itself; run the install script to update: {update.REPO_URL}#quick-start")
+        return False
+    if not ui.can_prompt():
+        ui.info("Run `spotarchive --update` to install it.")
+        return False
+    answer = ui.confirm("Install the update now?")
+    if answer is None:
+        raise KeyboardInterrupt
+    if not answer:
+        return False
+    try:
+        _install_update(latest)
+    except CliError as exc:
+        ui.warn(f"{exc} Continuing with {__version__}.")
+        return False
+    return True
+
+
+def relaunch(argv: list[str]) -> int:
+    """Run the updated code in a new process; this one still has the old code loaded."""
+    env = {**os.environ, update.SKIP_CHECK_ENV: "1"}
+    return subprocess.run([sys.executable, "-m", "spotarchive", *argv], env=env).returncode
+
+
 def main(argv: list[str] | None = None, data_dir: Path = DEFAULT_DATA_DIR) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.noselect and not args.fetch:
         parser.error("--noselect only works together with --fetch (e.g. -fn)")
+    if args.update and (args.login or args.fetch or args.download):
+        parser.error("--update can't be combined with other options")
 
     try:
+        if args.update:
+            run_update()
+            return 0
+        if not (args.login or args.fetch or args.download) and check_for_update():
+            return relaunch(sys.argv[1:] if argv is None else argv)
         store = SessionStore.load(data_dir)
         if args.login:
             run_login(store)

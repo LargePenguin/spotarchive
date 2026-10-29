@@ -106,6 +106,15 @@ def library_playlist(playlist_id, name, owner="Fake Owner"):
                      "ownerV2": {"data": {"__typename": "User", "name": owner}}}}
 
 
+@pytest.fixture(autouse=True)
+def no_update_check(monkeypatch):
+    # Tests never ask GitHub for the latest version; by default there is no update.
+    from spotarchive import __version__, update
+
+    monkeypatch.setattr(update, "latest_version", lambda http=None, timeout=10: __version__)
+    monkeypatch.delenv(update.SKIP_CHECK_ENV, raising=False)
+
+
 @pytest.fixture
 def http():
     return FakeHttp()
