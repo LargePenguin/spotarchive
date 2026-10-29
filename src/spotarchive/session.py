@@ -38,6 +38,8 @@ class SpotifySession:
     expires_at_ms: int = 0
     user_id: str | None = None
     display_name: str | None = None
+    # Persisted-query hashes read from the web player (operation -> hash).
+    query_hashes: dict[str, str] = field(default_factory=dict)
 
     def token_is_fresh(self, at_ms: int | None = None) -> bool:
         if not self.access_token:

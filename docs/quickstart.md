@@ -47,7 +47,7 @@ A browser window opens at Spotify's login page. Sign in; once Spotify forwards y
 spotarchive --fetch
 ```
 
-Choose which playlists to cache. Each gets a folder under the download folder (default `data/`, e.g. `data/MyPlaylistName/`) containing a `setlist.csv` with name, artist, album, release date and date added (plus duration, ISRC and Spotify link). Use `--fetch --noselect` (`-fn`) to reuse your previous selection. Details: [Fetching playlists](fetching.md).
+Choose which playlists to cache. Each gets a folder under the download folder (default `data/`, e.g. `data/MyPlaylistName/`) containing a `setlist.csv` with name, artist, album, release date and date added (plus duration and Spotify link). Use `--fetch --noselect` (`-fn`) to reuse your previous selection. Details: [Fetching playlists](fetching.md).
 
 ## 4. Download
 

@@ -16,7 +16,7 @@ from spotarchive.spotify.auth import (
     SessionTokenProvider,
     interactive_login,
 )
-from spotarchive.spotify.client import RateLimited, SpotifyApiError, SpotifyClient
+from spotarchive.spotify.client import QueryOutdated, RateLimited, SpotifyApiError, SpotifyClient
 
 
 # Profile of the login browser window, next to session.json.
@@ -91,7 +91,7 @@ def ensure_login(store: SessionStore) -> None:
         return
     try:
         make_client(store).current_user()
-    except RateLimited:
+    except (RateLimited, QueryOutdated):
         # The login is fine; logging in again wouldn't help.
         raise
     except (AuthError, SpotifyApiError) as exc:

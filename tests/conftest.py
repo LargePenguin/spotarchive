@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from urllib.parse import urlencode
-
 import pytest
 
-from spotarchive.spotify.client import API_URL
+from spotarchive.spotify.client import PATHFINDER_URL
 
 
 class FakeResponse:
@@ -27,51 +25,84 @@ class FakeResponse:
 
 
 class FakeHttp:
-    """Serves queued responses per URL (path relative to the API, plus query)."""
+    """Serves queued responses per pathfinder operation name."""
 
     def __init__(self):
         self.routes: dict[str, list[FakeResponse]] = {}
-        self.calls: list[tuple[str, dict]] = []
+        # (operationName, variables, sha256Hash, headers) per request
+        self.calls: list[tuple[str, dict, str, dict]] = []
 
-    def add(self, url, *responses):
-        self.routes.setdefault(url, []).extend(responses)
+    def add(self, operation, *responses):
+        self.routes.setdefault(operation, []).extend(responses)
 
-    def get(self, url, params=None, headers=None, timeout=None):
-        key = url.removeprefix(API_URL)
-        if params:
-            key += "?" + urlencode(params)
-        self.calls.append((key, headers or {}))
-        queue = self.routes.get(key)
+    def post(self, url, json=None, headers=None, timeout=None):
+        assert url == PATHFINDER_URL
+        operation = json["operationName"]
+        query_hash = json["extensions"]["persistedQuery"]["sha256Hash"]
+        self.calls.append((operation, json["variables"], query_hash, headers or {}))
+        queue = self.routes.get(operation)
         if not queue:
-            return FakeResponse(404, {"error": {"status": 404, "message": "Not found"}})
+            return FakeResponse(412, None)
         # The last response repeats so routes can be hit several times.
         return queue.pop(0) if len(queue) > 1 else queue[0]
 
 
 class FakeTokens:
-    def __init__(self):
+    def __init__(self, hashes=None):
         self.refreshes = 0
+        self.hashes = dict(hashes or {})
+        # Hashes "read from the web player" by the next refresh, if any.
+        self.hashes_after_refresh = None
 
     def get_token(self, force_refresh=False):
         if force_refresh:
             self.refreshes += 1
+            if self.hashes_after_refresh is not None:
+                self.hashes = self.hashes_after_refresh
         return f"dummy-token-{self.refreshes}"
 
+    def query_hashes(self):
+        return self.hashes
 
-def track_json(name, artists=("Fake Artist",), album="Fake Album", release="2001-02-03", isrc="XX0000000001"):
+
+def track_json(name, artists=("Fake Artist",), album="Fake Album", release="2001-02-03T00:00:00Z",
+               precision="DAY", track_id=None):
+    track_id = track_id or name.replace(" ", "")
     return {
-        "type": "track",
+        "__typename": "Track",
         "name": name,
-        "artists": [{"name": a} for a in artists],
-        "album": {"name": album, "release_date": release},
-        "duration_ms": 180000,
-        "external_ids": {"isrc": isrc},
-        "external_urls": {"spotify": f"https://open.spotify.com/track/{name.replace(' ', '')}"},
+        "uri": f"spotify:track:{track_id}",
+        "artists": {"items": [{"profile": {"name": a}, "uri": "spotify:artist:fake"} for a in artists]},
+        "albumOfTrack": {"name": album, "uri": "spotify:album:fake",
+                         "date": {"isoString": release, "precision": precision}},
+        "trackDuration": {"totalMilliseconds": 180000},
     }
 
 
-def page(items, total=None, next_url=None):
-    return FakeResponse(200, {"items": items, "total": len(items) if total is None else total, "next": next_url})
+def playlist_entry(data, added="2024-01-01T00:00:00Z"):
+    return {"addedAt": {"isoString": added}, "itemV2": {"__typename": "TrackResponseWrapper", "data": data}}
+
+
+def ok(data):
+    return FakeResponse(200, {"data": data})
+
+
+def playlist_page(entries, total=None):
+    total = len(entries) if total is None else total
+    return ok({"playlistV2": {"__typename": "Playlist",
+                              "content": {"__typename": "PlaylistItemsPage", "items": entries, "totalCount": total}}})
+
+
+def library_page(items, total=None):
+    total = len(items) if total is None else total
+    return ok({"me": {"libraryV3": {"__typename": "LibraryPage", "items": [{"item": i} for i in items],
+                                    "totalCount": total}}})
+
+
+def library_playlist(playlist_id, name, owner="Fake Owner"):
+    return {"__typename": "PlaylistResponseWrapper", "_uri": f"spotify:playlist:{playlist_id}",
+            "data": {"__typename": "Playlist", "uri": f"spotify:playlist:{playlist_id}", "name": name,
+                     "ownerV2": {"data": {"__typename": "User", "name": owner}}}}
 
 
 @pytest.fixture

@@ -20,12 +20,15 @@ has reached the web player.
 The same headless step runs again whenever the token expires, so the web
 player hands out a fresh one. Letting the real web player mint the
 token avoids re-implementing Spotify's token endpoint, which changes often.
+The same page load also yields the hashes of the web player's API queries
+(read from its main script), which :mod:`spotarchive.spotify.client` needs.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -41,6 +44,10 @@ LOGIN_URL = "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spot
 WEB_PLAYER_URL = "https://open.spotify.com/"
 LOGIN_COOKIE = "sp_dc"
 TOKEN_PATHS = ("/api/token", "/get_access_token")
+# The web player's main script, which defines the queries spotarchive uses, as
+# e.g. ("fetchPlaylist","query","<sha256>",...).
+WEB_PLAYER_SCRIPT_RE = re.compile(r"/web-player\.[0-9a-f]+\.js$")
+QUERY_HASH_RE = re.compile(r'"(\w+)","query","([0-9a-f]{64})"')
 
 LOGIN_TIMEOUT_S = 600
 # How long a window on the web player may lack the login cookie before it
@@ -87,6 +94,7 @@ class BrowserUnavailable(AuthError):
 
 class TokenProvider(Protocol):
     def get_token(self, force_refresh: bool = False) -> str: ...
+    def query_hashes(self) -> dict[str, str]: ...
 
 
 @dataclass
@@ -99,6 +107,15 @@ class TokenInfo:
 def is_token_url(url: str) -> bool:
     parsed = urlparse(url)
     return parsed.hostname == "open.spotify.com" and parsed.path in TOKEN_PATHS
+
+
+def is_web_player_script(url: str) -> bool:
+    return bool(WEB_PLAYER_SCRIPT_RE.search(urlparse(url).path))
+
+
+def extract_query_hashes(script: str) -> dict[str, str]:
+    """Persisted-query hashes (operation -> hash) defined in the web player's JS."""
+    return {m.group(1): m.group(2) for m in QUERY_HASH_RE.finditer(script)}
 
 
 def parse_token_response(data: object) -> TokenInfo | None:
@@ -152,16 +169,18 @@ def _launch(playwright, headless: bool):
 
 
 class _TokenWatcher:
-    """Collects the web player's token responses from a browser context."""
+    """Collects the web player's token responses, and the query hashes from
+    its script, from a browser context."""
 
     def __init__(self, context):
         self._pending = []
+        self.query_hashes: dict[str, str] = {}
         context.on("response", self._on_response)
 
     def _on_response(self, response) -> None:
         # Only queue here: reading the body inside an event handler can
         # deadlock the sync API, so it is read from the main loop instead.
-        if is_token_url(response.url):
+        if is_token_url(response.url) or is_web_player_script(response.url):
             self._pending.append(response)
 
     def poll(self) -> TokenInfo | None:
@@ -170,6 +189,9 @@ class _TokenWatcher:
         while self._pending:
             response = self._pending.pop(0)
             try:
+                if is_web_player_script(response.url):
+                    self.query_hashes.update(extract_query_hashes(response.text()))
+                    continue
                 info = parse_token_response(response.json())
             except Exception:
                 continue
@@ -178,11 +200,13 @@ class _TokenWatcher:
         return found
 
 
-def _web_player_token(context, timeout_s: int) -> TokenInfo | None:
-    """Load the web player and return the logged-in token it fetches.
+def _web_player_token(context, timeout_s: int) -> tuple[TokenInfo | None, dict[str, str]]:
+    """Load the web player; return the logged-in token it fetches and the
+    query hashes its script defines.
 
-    Returns None when only a logged-out (anonymous) token shows up, i.e. the
-    context's cookies hold no valid login.
+    The token is None when only a logged-out (anonymous) token shows up, i.e.
+    the context's cookies hold no valid login. The web player's script loads
+    before it asks for a token, so its hashes are in by then.
     """
     watcher = _TokenWatcher(context)
     page = context.pages[0] if context.pages else context.new_page()
@@ -195,9 +219,9 @@ def _web_player_token(context, timeout_s: int) -> TokenInfo | None:
         if info and info.anonymous:
             anonymous_since = anonymous_since or time.monotonic()
         elif info:
-            return info
+            return info, watcher.query_hashes
         if anonymous_since and time.monotonic() - anonymous_since > ANONYMOUS_GRACE_S:
-            return None
+            return None, watcher.query_hashes
         page.wait_for_timeout(POLL_MS)
     raise AuthError("Timed out waiting for Spotify to issue a token.")
 
@@ -441,7 +465,7 @@ def refresh_session(
             context.add_cookies(session.cookies)
             if configure_context:
                 configure_context(context)
-            info = _web_player_token(context, timeout_s)
+            info, query_hashes = _web_player_token(context, timeout_s)
             if info is None:
                 # Only a logged-out token showed up: the cookies are dead.
                 raise LoginRequired("The saved Spotify login has expired.")
@@ -454,6 +478,8 @@ def refresh_session(
                 expires_at_ms=info.expires_at_ms,
                 user_id=session.user_id,
                 display_name=session.display_name,
+                # Keep the old hashes if the script wasn't seen this time.
+                query_hashes=query_hashes or session.query_hashes,
             )
         except PlaywrightError as exc:
             raise AuthError(f"Token refresh failed: {str(exc).splitlines()[0]}") from exc
@@ -483,3 +509,7 @@ class SessionTokenProvider:
             self.store.spotify = session = self._refresh(session)
             self.store.save()
         return session.access_token
+
+    def query_hashes(self) -> dict[str, str]:
+        session = self.store.spotify
+        return dict(session.query_hashes) if session else {}

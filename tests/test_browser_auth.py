@@ -32,9 +32,17 @@ LOGIN_PAGE = f"""<html><body>Fake login<script>
 document.cookie = "sp_dc={GOOD_COOKIE}; domain=.spotify.com; path=/; secure; max-age=3600";
 </script></body></html>"""
 
-WEB_PLAYER = """<html><body>Fake web player<script>
+FAKE_HASH = "a" * 64
+# Like the real web player, the main script defines the queries and then asks
+# for a token.
+WEB_PLAYER_SCRIPT = f"""
+function Query() {{}}
+var fetchPlaylistQuery = new Query("fetchPlaylist","query","{FAKE_HASH}",null);
 fetch("/api/token?reason=init&productType=web-player");
-</script></body></html>"""
+"""
+WEB_PLAYER = """<html><body>Fake web player
+<script src="https://open.spotifycdn.com/cdn/build/web-player/web-player.0123abcd.js"></script>
+</body></html>"""
 
 
 def fake_spotify(context):
@@ -50,6 +58,8 @@ def fake_spotify(context):
                 "accessTokenExpirationTimestampMs": 4_000_000_000_000,
                 "isAnonymous": not logged_in,
             }))
+        elif url.hostname == "open.spotifycdn.com" and url.path.endswith("/web-player.0123abcd.js"):
+            route.fulfill(status=200, content_type="application/javascript", body=WEB_PLAYER_SCRIPT)
         elif url.hostname == "open.spotify.com":
             route.fulfill(status=200, content_type="text/html", body=WEB_PLAYER)
         else:
@@ -184,6 +194,7 @@ def test_refresh_gets_new_token_from_cookies():
     new = refresh_session(old, timeout_s=30, configure_context=fake_spotify)
     assert new.access_token == "dummy-token"
     assert new.display_name == "Fake"
+    assert new.query_hashes == {"fetchPlaylist": FAKE_HASH}
 
 
 def test_refresh_with_dead_cookie_requires_login():

@@ -8,9 +8,11 @@ from spotarchive.spotify.auth import (
     LOGIN_URL,
     LoginRequired,
     SessionTokenProvider,
+    extract_query_hashes,
     has_login_cookie,
     installed_browsers,
     is_token_url,
+    is_web_player_script,
     login_browser_command,
     normalize_user_agent,
     parse_token_response,
@@ -27,6 +29,25 @@ from spotarchive.spotify.auth import (
 ])
 def test_is_token_url(url, expected):
     assert is_token_url(url) is expected
+
+
+@pytest.mark.parametrize("url, expected", [
+    ("https://open.spotifycdn.com/cdn/build/web-player/web-player.c7335fd5.js", True),
+    ("https://open.spotifycdn.com/cdn/build/web-player/vendor~web-player.c7335fd5.js", False),
+    ("https://open.spotifycdn.com/cdn/build/web-player/xpui-routes-search.2aa27db9.js", False),
+    ("https://open.spotifycdn.com/cdn/build/web-player/web-player.c7335fd5.css", False),
+])
+def test_is_web_player_script(url, expected):
+    assert is_web_player_script(url) is expected
+
+
+def test_extract_query_hashes():
+    script = (
+        'let a=new X.l("libraryV3","query","' + "1" * 64 + '",null);'
+        'let b=new X.l("addToLibrary","mutation","' + "2" * 64 + '",null);'
+        'let c=new X.l("tooShort","query","abc",null);'
+    )
+    assert extract_query_hashes(script) == {"libraryV3": "1" * 64}
 
 
 def test_parse_token_response():
@@ -92,6 +113,14 @@ def test_provider_force_refresh(tmp_path):
 
     assert SessionTokenProvider(store, refresh=refresh).get_token(force_refresh=True) == "new-token"
     assert calls == [1]
+
+
+def test_provider_hands_out_saved_query_hashes(tmp_path):
+    store = _store(tmp_path, access_token="cached-token", expires_at_ms=2**62)
+    store.spotify.query_hashes = {"fetchPlaylist": "a" * 64}
+    store.save()
+    provider = SessionTokenProvider(SessionStore.load(tmp_path))
+    assert provider.query_hashes() == {"fetchPlaylist": "a" * 64}
 
 
 def test_provider_without_login(tmp_path):
