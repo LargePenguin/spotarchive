@@ -21,12 +21,12 @@
 Archiver for Spotify and YouTube Music: cache your playlists' metadata, then legally source the songs through a swappable download backend.
 
 > [!WARNING]
-> Early development: Spotify login, playlist fetching, downloading, metadata cleanup, the configuration file, the install script and self-updates work.
+> Early development: Bugs and other tomfoolery likely exist. Please open an issue if you encounter any trouble.
 
 ## Features
 
 - Browser-based Spotify login
-- Per-playlist `setlist.csv` metadata caches
+- Per-playlist `setlist.csv` metadata caching
 - Pluggable download backend (default: [SomeDL](https://github.com/ChemistryGull/SomeDL))
 - Smart downloading that skips songs you already have
 - Metadata cleanup, from the download helper or from Spotify's metadata
