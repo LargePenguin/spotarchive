@@ -1,7 +1,7 @@
 # Quickstart
 
 > [!WARNING]
-> Spotarchive is still being built. Everything on this page works today except metadata cleanup (`--meta`), which is planned, along with the all-in-one run's metadata step.
+> Spotarchive is still being built. Everything on this page works today.
 
 ## Legal note
 
@@ -36,7 +36,8 @@ The install script:
 2. creates a virtualenv `.venv` in that folder and installs Spotarchive with all its Python dependencies, including SomeDL, the default [download backend](backends.md), and the Deno runtime its downloader yt-dlp needs for YouTube;
 3. downloads the Chromium browser used for [logging in](authentication.md#which-browser-is-used);
 4. installs [FFmpeg](https://ffmpeg.org/), which SomeDL needs, if it's missing. It asks first, then uses your package manager (apt, dnf, pacman, zypper or apk) or winget on Windows;
-5. puts the `spotarchive` command on your `PATH`. On Linux it's linked into `~/.local/bin`. On Windows it goes into `%LOCALAPPDATA%\spotarchive\bin`, which is added to your user `PATH`, so open a new terminal afterwards.
+5. creates the [configuration file](configuration.md) `spotarchive.toml` in that folder from `spotarchive.example.toml`, unless it already exists;
+6. puts the `spotarchive` command on your `PATH`. On Linux it's linked into `~/.local/bin`. On Windows it goes into `%LOCALAPPDATA%\spotarchive\bin`, which is added to your user `PATH`, so open a new terminal afterwards.
 
 Running it again repairs or updates the install. If you already have a clone, run `./install.sh` or `powershell -ExecutionPolicy Bypass -File install.ps1` inside it to install that clone instead.
 
@@ -59,11 +60,11 @@ pip install -e ".[somedl]"
 python -m playwright install chromium
 ```
 
-The first command installs Spotarchive together with SomeDL and Deno. SomeDL also needs [FFmpeg](https://ffmpeg.org/) on your `PATH`; see [installing SomeDL](backends.md#installing-it). The last command downloads the browser used for logging in. You can skip it if Google Chrome or Microsoft Edge is installed.
+The first command installs Spotarchive together with SomeDL and Deno. SomeDL also needs [FFmpeg](https://ffmpeg.org/) on your `PATH`; see [installing SomeDL](backends.md#installing-it). The last command downloads the browser used for logging in. You can skip it if Google Chrome or Microsoft Edge is installed. To change settings, copy `spotarchive.example.toml` to `spotarchive.toml` (see [Configuration](configuration.md)).
 
 </details>
 
-Spotarchive keeps its data in a `data/` folder inside the folder you run it from, so run it from wherever your music should go.
+Spotarchive keeps its data in a `data/` folder inside the folder you run it from, so run it from wherever your music should go, or set a fixed folder with [`data_dir`](configuration.md#data_dir) in `spotarchive.toml`.
 
 ## 2. Log in
 
@@ -89,18 +90,26 @@ spotarchive --download
 
 SomeDL finds each song of your setlists on YouTube Music and saves it into the playlist's folder. Songs already present are skipped, so running it again only downloads what's new or failed before. `spotarchive -fnd` refreshes your setlists and downloads in one go. Details: [Downloading](downloading.md).
 
-Cleaning up metadata afterwards with `--meta` (`-dm` together) is planned.
+## 5. Fix the metadata
 
-## 5. Everything at once
+```bash
+spotarchive --meta
+```
+
+Gives the downloaded songs proper tags (title, artists, album, ...), from the download helper (default) or from Spotify's metadata in the setlists. `spotarchive -dm` downloads and fixes in one go. Details: [Metadata cleanup](metadata.md).
+
+## 6. Everything at once
 
 ```bash
 spotarchive
 ```
 
-Checks GitHub for a newer version first and asks before installing it. Then it logs in if needed, fetches (asking which playlists) and downloads. Fixing metadata at the end is planned.
+Checks GitHub for a newer version first and asks before installing it. Then it logs in if needed, fetches (asking which playlists), downloads and fixes the metadata.
 
 To update at any time, run `spotarchive --update` (`-u`). Details: [Updating](updating.md).
 
 ## Next steps
+
+See [Configuration](configuration.md) to change the download folder, the audio format or where the tags come from.
 
 Back to the [documentation index](README.md).

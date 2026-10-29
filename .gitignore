@@ -29,3 +29,5 @@ session.json
 *.session
 *.cookies
 .env
+# Your configuration (copied from spotarchive.example.toml)
+spotarchive.toml

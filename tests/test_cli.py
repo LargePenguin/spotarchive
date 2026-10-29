@@ -36,6 +36,7 @@ class FakeClient:
         return tracks
 
 
+REAL_MAKE_BACKEND = cli.make_backend
 PLAYLISTS = [Playlist("p1", "Road Trip", total=2), Playlist("p2", "Focus/Work", total=1)]
 TRACKS = {"p1": [Track("Song A", ["Fake Artist"]), Track("Song B", ["Fake Artist"])], "p2": [Track("Song C")]}
 
@@ -51,7 +52,7 @@ def logged_in(tmp_path):
 @pytest.fixture(autouse=True)
 def fake_backend(backend, monkeypatch):
     # Tests never run a real download helper.
-    monkeypatch.setattr(cli, "make_backend", lambda: backend)
+    monkeypatch.setattr(cli, "make_backend", lambda settings: backend)
     return backend
 
 
@@ -297,3 +298,74 @@ def test_backend_with_own_output_gets_a_line_per_song(logged_in, fake_client, fa
     out = capsys.readouterr().out
     assert "[1/2] Fake Artist - Song A" in out
     assert "Fake Artist - Song B: not found" in out
+
+
+def song_tags(path):
+    import mutagen
+
+    return dict(mutagen.File(path, easy=True))
+
+
+def test_default_run_fixes_metadata_after_downloading(logged_in, fake_client, monkeypatch, capsys):
+    choose(monkeypatch, ["p1"])
+    assert cli.main([], data_dir=logged_in) == 0
+    # The fake backend can't tag, so the setlist's metadata is used.
+    assert song_tags(logged_in / "Road Trip" / "YT Fake Artist - Song A.mp3")["title"] == ["Song A"]
+    assert "Road Trip: 2 fixed, 0 already fine" in capsys.readouterr().out
+
+
+def test_meta_uses_the_backend_when_it_can_tag(logged_in, fake_client, fake_backend, monkeypatch):
+    fake_backend.can_tag = True
+    choose(monkeypatch, ["p1"])
+    cli.main(["-fd"], data_dir=logged_in)
+    assert cli.main(["-m"], data_dir=logged_in) == 0
+    assert fake_backend.tagged == ["YT Fake Artist - Song A.mp3", "YT Fake Artist - Song B.mp3"]
+
+
+def test_meta_source_from_config(logged_in, fake_client, fake_backend, monkeypatch, tmp_path_factory):
+    fake_backend.can_tag = True
+    path = tmp_path_factory.mktemp("cfg") / "spotarchive.toml"
+    path.write_text('[metadata]\nsource = "setlist"\n', encoding="utf-8")
+    choose(monkeypatch, ["p1"])
+    assert cli.main(["-fdm", "--config", str(path)], data_dir=logged_in) == 0
+    assert fake_backend.tagged == []
+    assert song_tags(logged_in / "Road Trip" / "YT Fake Artist - Song B.mp3")["artist"] == ["Fake Artist"]
+
+
+def test_meta_still_runs_when_a_download_failed(logged_in, fake_client, fake_backend, monkeypatch, capsys):
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    fake_backend.failing = {"Song A"}
+    assert cli.main(["-dm"], data_dir=logged_in) == 1
+    assert "Road Trip: 1 fixed" in capsys.readouterr().out
+
+
+def test_meta_before_fetch_fails(logged_in):
+    assert cli.main(["-m"], data_dir=logged_in) == 1
+
+
+def test_config_sets_backend_and_data_dir(tmp_path, monkeypatch, capsys):
+    data = tmp_path / "music"
+    path = tmp_path / "spotarchive.toml"
+    path.write_text(f'data_dir = "{data.as_posix()}"\n[download]\nbackend = "nope"\n', encoding="utf-8")
+    store = SessionStore.load(data)
+    store.playlists["p1"] = PlaylistState("Road Trip", selected=True, folder="Road Trip")
+    store.save()
+    monkeypatch.setattr(cli, "make_backend", REAL_MAKE_BACKEND)
+
+    assert cli.main(["-d", "--config", str(path)]) == 1
+    # Got past finding the fetched playlist in data_dir, then the backend.
+    assert "Unknown download backend 'nope'" in capsys.readouterr().out
+
+
+def test_bad_config_fails(logged_in, tmp_path, capsys):
+    path = tmp_path / "bad.toml"
+    path.write_text("[metadata]\nsource = 'spotify'\n", encoding="utf-8")
+    assert cli.main(["-m", "--config", str(path)], data_dir=logged_in) == 1
+    assert "metadata.source must be one of" in capsys.readouterr().out
+
+
+def test_unknown_backend_option_fails(tmp_path):
+    settings = cli.Config(path=tmp_path / "spotarchive.toml", backend_options={"somedl": {"colour": "blue"}})
+    with pytest.raises(cli.ConfigError, match=r"\[backends.somedl\]"):
+        REAL_MAKE_BACKEND(settings)

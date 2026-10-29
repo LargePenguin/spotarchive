@@ -32,10 +32,12 @@ somedl --here --skip-file-check -- "First Artist - Song Title"
 ```
 
 - The search is the song's first artist and title from `setlist.csv`.
-- `--here` saves the file in the playlist folder as `Artist - Song`, overriding the output folder and file name template from your SomeDL config, so every song lands where Spotarchive expects it.
+- `--here` saves the file in the playlist folder as `Artist - Song`, overriding the output folder and file name template from your SomeDL config, so every song lands where Spotarchive expects it. With [`flat = false`](configuration.md#backendssomedl) Spotarchive passes `--output .` instead: SomeDL then uses the output template from its config, inside the playlist folder.
 - `--skip-file-check` makes SomeDL download the song even if it thinks a similar file exists: Spotarchive has already [decided the song is missing](downloading.md#skipping-songs-you-already-have).
 
-Everything else comes from [SomeDL's own config file](https://github.com/ChemistryGull/SomeDL#post-install) (`somedl --generate-config`), for example the audio format (`mp3` by default), lyrics and cover art settings. Spotarchive's own configuration file, where these can be set per backend, is planned.
+The audio format (`--format`), the path to `somedl` and extra options can be set in [`[backends.somedl]`](configuration.md#backendssomedl) of Spotarchive's configuration file. Everything else comes from [SomeDL's own config file](https://github.com/ChemistryGull/SomeDL#post-install) (`somedl --generate-config`), for example the audio format when Spotarchive doesn't set one (`mp3` by default), lyrics and cover art settings.
+
+SomeDL also [fixes metadata](metadata.md#backend) for files it didn't download, through `somedl import`.
 
 SomeDL reports success even when a song couldn't be found, so Spotarchive decides by checking that a new audio file (`.mp3`, `.m4a`, `.opus`, `.ogg` or `.flac`) appeared in the folder.
 
@@ -54,16 +56,23 @@ A backend is a subclass of `DownloadBackend` in [`src/spotarchive/backends/base.
 ```python
 from pathlib import Path
 
-from spotarchive.backends.base import BackendUnavailable, DownloadBackend, DownloadFailed, Song
+from spotarchive.backends.base import BackendUnavailable, DownloadBackend, DownloadFailed, Song, TaggingFailed
 
 
 class ExampleBackend(DownloadBackend):
     name = "example"                     # shown in messages and stored in .downloads.json
     shows_own_output = False             # True if the helper prints its own progress
     audio_extensions = frozenset({".mp3"})
+    can_tag = False                      # True if tag() is implemented
+    tags_downloads = False               # True if download() already tags its files
+
+    def __init__(self, quality: str = "high"):
+        # Settings from [backends.example] in spotarchive.toml arrive as
+        # keyword arguments; give every one a default.
+        self.quality = quality
 
     def check(self) -> None:
-        # Called once before any download. Raise BackendUnavailable with a
+        # Called once before downloading or tagging. Raise BackendUnavailable with a
         # helpful message if the helper can't run (not installed, etc.).
         ...
 
@@ -77,16 +86,23 @@ class ExampleBackend(DownloadBackend):
         # Raise DownloadFailed if nothing could be downloaded; the other
         # songs are still tried.
         ...
+
+    def tag(self, song: Song, file: Path) -> None:
+        # Optional (with can_tag = True): rewrite the file's metadata with
+        # the helper's own. Raise TaggingFailed if it can't.
+        ...
 ```
 
 Then register it in `BACKENDS` in [`src/spotarchive/backends/__init__.py`](../src/spotarchive/backends/__init__.py).
 
 What a backend gets and must do:
 
-- `Song` carries the setlist row: `name`, `artists` (a tuple, first artist first), `album`, `duration_ms`, `isrc` and `spotify_url`. Use them to find the song; never download from Spotify.
+- `Song` carries the setlist row: `name`, `artists` (a tuple, first artist first), `album`, `release_date`, `duration_ms`, `isrc` and `spotify_url`. Use them to find the song; never download from Spotify.
 - `download` is only called for songs that are missing. Spotarchive does the skipping and keeps the [download record](downloading.md#the-downloadsjson-record), so a backend doesn't need to remember anything between runs.
 - Return only the audio files created for this song, and only with an extension listed in `audio_extensions`: these are what the skip check looks for.
 - Put files in `folder`. Subfolders work too, as long as `download` returns the files' paths.
+- `tag` is used by [metadata cleanup](metadata.md#backend) with `source = "backend"`: for every song in the folder, unless `tags_downloads` is set and this backend downloaded it, or it was already tagged by it. It gets the setlist row and one file, and must leave the file where it is. Without `can_tag`, metadata cleanup falls back to the setlist.
+- Settings: each key of `[backends.<name>]` in the [configuration file](configuration.md#backendsname) is passed to the constructor as a keyword argument (empty strings are left out, so the default applies). Document them in `docs/configuration.md` and `spotarchive.example.toml`.
 - With `shows_own_output = True` the helper may write to the terminal; Spotarchive prints a `[n/total]` line before each song instead of drawing a progress bar.
 
 Tests for a backend must not download real audio: fake the helper (see `tests/test_somedl.py`, which replaces `subprocess.run`).

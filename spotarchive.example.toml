@@ -1,0 +1,37 @@
+# Spotarchive configuration.
+#
+# Copy this file to spotarchive.toml in the same folder (the install scripts
+# do it for you) and change what you need. Every setting is optional: a
+# missing setting, or a missing file, means the default shown here.
+# All settings: docs/configuration.md
+
+# Folder that holds session.json and one folder per playlist. A relative path
+# is relative to the folder you run spotarchive in.
+data_dir = "data"
+
+[download]
+# Download helper that sources the songs. Available: "somedl".
+backend = "somedl"
+
+[metadata]
+# Where `spotarchive --meta` takes the songs' tags from:
+#   "backend"  the download helper's own metadata (SomeDL: YouTube Music,
+#              MusicBrainz, ...). Falls back to "setlist" for helpers that
+#              can't tag files.
+#   "setlist"  Spotify's metadata from setlist.csv (title, artists, album,
+#              release date).
+source = "backend"
+
+# Settings for each backend, under [backends.<name>].
+[backends.somedl]
+# Path to the somedl program. Empty: look next to Spotarchive's Python, then on PATH.
+executable = ""
+# Audio format: "mp3", "m4a", "opus", "vorbis", "flac", "best", ...
+# Empty: the format from SomeDL's own config file (mp3 unless you changed it).
+audio_format = ""
+# true: every song directly in its playlist folder, named "Artist - Song".
+# false: the output template from SomeDL's own config file (for example
+# artist/album subfolders), inside the playlist folder.
+flat = true
+# Extra command-line options for every download, e.g. ["--sleep", "5"].
+extra_args = []

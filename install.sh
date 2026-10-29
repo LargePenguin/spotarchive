@@ -123,6 +123,12 @@ step "Installing Spotarchive and its Python dependencies (including SomeDL)"
 "$VPY" -m pip install --upgrade --quiet pip
 "$VPY" -m pip install --upgrade --editable "$PROJECT_DIR[$EXTRAS]"
 
+# Never overwrites an existing configuration.
+if [ ! -e "$PROJECT_DIR/spotarchive.toml" ]; then
+    cp "$PROJECT_DIR/spotarchive.example.toml" "$PROJECT_DIR/spotarchive.toml"
+    step "Created the configuration file $PROJECT_DIR/spotarchive.toml"
+fi
+
 if [ "$WITH_BROWSER" = 1 ]; then
     step "Installing the Chromium browser for the Spotify login"
     "$VPY" -m playwright install chromium ||

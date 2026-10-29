@@ -102,12 +102,13 @@ def find_present(songs: list[Song], folder: Path, record: dict[str, dict],
 
     A song counts as present when a file recorded for it still exists, or
     when an audio file is named like ``Artist - Song`` (files from before
-    the record existed, or added by hand).
+    the record existed, or added by hand), also in subfolders.
     """
     by_stem: dict[str, str] = {}
-    for p in folder.iterdir():
-        if p.is_file() and p.suffix.lower() in extensions:
-            by_stem.setdefault(_normalize(p.stem), p.name)
+    for p in sorted(folder.rglob("*")):
+        rel = p.relative_to(folder)
+        if p.is_file() and p.suffix.lower() in extensions and not rel.parts[0].startswith("."):
+            by_stem.setdefault(_normalize(p.stem), rel.as_posix())
 
     present: dict[str, list[str]] = {}
     for song in songs:
@@ -119,6 +120,21 @@ def find_present(songs: list[Song], folder: Path, record: dict[str, dict],
         if matches:
             present[song.key] = matches
     return present
+
+
+def record_present(folder: Path, record: dict[str, dict], present: dict[str, list[str]]) -> None:
+    """Write the files :func:`find_present` found back to the record, if they changed."""
+    changed = False
+    for key, files in present.items():
+        entry = record.get(key, {})
+        if entry.get("files") != files:
+            # Other files than the recorded ones: whoever downloaded or tagged
+            # those didn't make these.
+            kept = {k: v for k, v in entry.items() if k not in ("backend", "tagged")}
+            record[key] = {**kept, "files": files}
+            changed = True
+    if changed:
+        save_record(folder, record)
 
 
 def download_playlist(
@@ -139,14 +155,7 @@ def download_playlist(
     record = load_record(folder)
     present = find_present(songs, folder, record, backend.audio_extensions)
     result = PlaylistDownload(name, folder, total=len(songs), already_present=len(present))
-
-    changed = False
-    for key, files in present.items():
-        if record.get(key, {}).get("files") != files:
-            record[key] = {**record.get(key, {}), "files": files}
-            changed = True
-    if changed:
-        save_record(folder, record)
+    record_present(folder, record, present)
 
     pending = [s for s in songs if s.key not in present]
     for i, song in enumerate(pending, start=1):
