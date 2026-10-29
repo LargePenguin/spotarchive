@@ -33,7 +33,7 @@ irm https://raw.githubusercontent.com/LargePenguin/spotarchive/main/install.ps1 
 The install script:
 
 1. clones Spotarchive into `~/spotarchive` (`%USERPROFILE%\spotarchive` on Windows), or pulls the latest version if the clone is already there;
-2. creates a virtualenv `.venv` in that folder and installs Spotarchive with all its Python dependencies, including SomeDL, the default [download backend](backends.md);
+2. creates a virtualenv `.venv` in that folder and installs Spotarchive with all its Python dependencies, including SomeDL, the default [download backend](backends.md), and the Deno runtime its downloader yt-dlp needs for YouTube;
 3. downloads the Chromium browser used for [logging in](authentication.md#which-browser-is-used);
 4. installs [FFmpeg](https://ffmpeg.org/), which SomeDL needs, if it's missing. It asks first, then uses your package manager (apt, dnf, pacman, zypper or apk) or winget on Windows;
 5. puts the `spotarchive` command on your `PATH`. On Linux it's linked into `~/.local/bin`. On Windows it goes into `%LOCALAPPDATA%\spotarchive\bin`, which is added to your user `PATH`, so open a new terminal afterwards.
@@ -59,7 +59,7 @@ pip install -e ".[somedl]"
 python -m playwright install chromium
 ```
 
-The first command installs Spotarchive together with SomeDL. SomeDL also needs [FFmpeg](https://ffmpeg.org/) on your `PATH`; see [installing SomeDL](backends.md#installing-it). The last command downloads the browser used for logging in. You can skip it if Google Chrome or Microsoft Edge is installed.
+The first command installs Spotarchive together with SomeDL and Deno. SomeDL also needs [FFmpeg](https://ffmpeg.org/) on your `PATH`; see [installing SomeDL](backends.md#installing-it). The last command downloads the browser used for logging in. You can skip it if Google Chrome or Microsoft Edge is installed.
 
 </details>
 

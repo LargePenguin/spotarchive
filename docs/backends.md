@@ -8,20 +8,20 @@ Spotarchive doesn't download anything itself. It hands each song of a setlist to
 
 ### Installing it
 
-The [install script](quickstart.md#1-install) installs SomeDL and FFmpeg for you. To install it by hand, put it into the same environment as Spotarchive:
+The [install script](quickstart.md#1-install) installs SomeDL, Deno and FFmpeg for you. To install it by hand, put it into the same environment as Spotarchive:
 
 ```bash
 pip install -e ".[somedl]"     # from a clone of Spotarchive
 ```
 
-or on its own, for example with [pipx](https://pipx.pypa.io/): `pipx install somedl`. Spotarchive looks for the `somedl` program next to the Python running Spotarchive first, then on your `PATH`.
+or on its own, for example with [pipx](https://pipx.pypa.io/): `pipx install somedl`, then `pipx inject somedl "yt-dlp[default,deno]"`. Spotarchive looks for the `somedl` program next to the Python running Spotarchive first, then on your `PATH`.
 
 SomeDL also needs:
 
 - **[FFmpeg](https://ffmpeg.org/)** (required) to convert the audio. Spotarchive checks for it before downloading. See SomeDL's [FFmpeg guide](https://github.com/ChemistryGull/SomeDL/blob/main/docs/how_to_install_ffmpeg.md).
-- **[Deno](https://docs.deno.com/runtime/getting_started/installation/)** (recommended): yt-dlp works better with it and warns without it.
+- **[Deno](https://deno.com/)** (strongly recommended): yt-dlp runs YouTube's JavaScript challenges with it. The `somedl` extra installs it into the virtualenv from PyPI (`yt-dlp[default,deno]`), together with yt-dlp's challenge solver; a system-wide [Deno](https://docs.deno.com/runtime/getting_started/installation/) on your `PATH` works too.
 
-If SomeDL or FFmpeg is missing, `spotarchive --download` stops with a message saying which one, before downloading anything.
+If SomeDL or FFmpeg is missing, `spotarchive --download` stops with a message saying which one, before downloading anything. If Deno is missing it only warns, since some songs may still download.
 
 ### How Spotarchive runs it
 
@@ -38,6 +38,14 @@ somedl --here --skip-file-check -- "First Artist - Song Title"
 Everything else comes from [SomeDL's own config file](https://github.com/ChemistryGull/SomeDL#post-install) (`somedl --generate-config`), for example the audio format (`mp3` by default), lyrics and cover art settings. Spotarchive's own configuration file, where these can be set per backend, is planned.
 
 SomeDL reports success even when a song couldn't be found, so Spotarchive decides by checking that a new audio file (`.mp3`, `.m4a`, `.opus`, `.ogg` or `.flac`) appeared in the folder.
+
+### Troubleshooting
+
+SomeDL's own messages appear in between Spotarchive's. The common ones:
+
+- **`yt-dlp needs Deno to work properly`**: Deno isn't installed where yt-dlp looks for it (SomeDL's environment, then your `PATH`). Spotarchive prints a similar warning before downloading. Re-run the [install script](quickstart.md#1-install), or `pip install "yt-dlp[default,deno]"` into the environment that has SomeDL.
+- **`unable to download video data: HTTP Error 403: Forbidden`**: YouTube refused the audio stream. This usually means Deno is missing (see above), so yt-dlp couldn't solve YouTube's challenge. Once Deno is installed, an occasional 403 can still happen. The song counts as failed, and the next `spotarchive --download` retries it. If 403s keep coming, update yt-dlp (`pip install -U "yt-dlp[default,deno]"`), since YouTube changes often, or wait a while in case your IP is being [rate limited](downloading.md#when-a-song-fails).
+- **`Lyrics: lrclib error: 503`** (or another lrclib error): the lyrics site [lrclib.net](https://lrclib.net/) is down or busy. It's harmless: the song still downloads, without lyrics unless the fallback source (YouTube) has them. To stop using lrclib, set `lyrics_source = "youtube"` and `lyrics_fallback_source = "none"` in SomeDL's config file.
 
 ## Writing a new backend
 
@@ -58,6 +66,11 @@ class ExampleBackend(DownloadBackend):
         # Called once before any download. Raise BackendUnavailable with a
         # helpful message if the helper can't run (not installed, etc.).
         ...
+
+    def warnings(self) -> list[str]:
+        # Optional, called after check(): problems that don't stop the
+        # downloads (a recommended dependency is missing, ...).
+        return []
 
     def download(self, song: Song, folder: Path) -> list[Path]:
         # Download one song into `folder` and return the new audio files.
