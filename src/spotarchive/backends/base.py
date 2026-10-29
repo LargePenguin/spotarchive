@@ -22,6 +22,10 @@ class DownloadFailed(Exception):
     """One song couldn't be downloaded; the others can still be tried."""
 
 
+class TaggingFailed(Exception):
+    """One file's metadata couldn't be fixed; the others can still be tried."""
+
+
 @dataclass(frozen=True)
 class Song:
     """One ``setlist.csv`` row, as handed to a backend."""
@@ -29,6 +33,7 @@ class Song:
     name: str
     artists: tuple[str, ...] = ()
     album: str = ""
+    release_date: str = ""
     duration_ms: int | None = None
     isrc: str = ""
     spotify_url: str = ""
@@ -41,6 +46,7 @@ class Song:
             name=(row.get("name") or "").strip(),
             artists=artists,
             album=(row.get("album") or "").strip(),
+            release_date=(row.get("release_date") or "").strip(),
             duration_ms=int(duration) if duration.isdigit() else None,
             isrc=(row.get("isrc") or "").strip(),
             spotify_url=(row.get("spotify_url") or "").strip(),
@@ -69,6 +75,11 @@ class DownloadBackend(ABC):
     # File types the helper produces (lowercase, with the dot); only these
     # count as downloaded songs.
     audio_extensions: frozenset[str] = frozenset()
+    # True when the helper can (re)write a file's metadata itself, see :meth:`tag`.
+    can_tag: bool = False
+    # True when files from :meth:`download` already carry the helper's own
+    # metadata, so they don't need :meth:`tag` afterwards.
+    tags_downloads: bool = False
 
     def check(self) -> None:
         """Raise :class:`BackendUnavailable` if the backend can't run."""
@@ -83,3 +94,11 @@ class DownloadBackend(ABC):
 
         Raise :class:`DownloadFailed` when nothing could be downloaded.
         """
+
+    def tag(self, song: Song, file: Path) -> None:
+        """Rewrite *file*'s metadata with what the helper finds for *song*.
+
+        Only called when :attr:`can_tag` is true. Raise :class:`TaggingFailed`
+        when the file couldn't be tagged.
+        """
+        raise NotImplementedError

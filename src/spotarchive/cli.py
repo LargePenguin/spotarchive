@@ -7,11 +7,13 @@ from pathlib import Path
 
 import requests
 
-from spotarchive import __version__, ui
+from spotarchive import __version__, config, ui
 from spotarchive.backends import BackendUnavailable, DownloadBackend, get_backend
+from spotarchive.config import Config, ConfigError
 from spotarchive.download import PlaylistDownload, download_playlist, selected_folders
 from spotarchive.fetch import fetch_setlists, update_selection
-from spotarchive.session import DEFAULT_DATA_DIR, SessionError, SessionStore
+from spotarchive.meta import PlaylistMeta, fix_playlist_metadata
+from spotarchive.session import SessionError, SessionStore
 from spotarchive.spotify.auth import (
     AuthError,
     LoginRequired,
@@ -37,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
             "setlist.csv files, then source the songs legally through a download "
             "backend. No audio is ever taken from Spotify."
         ),
-        epilog="With no options: log in if needed, fetch, then download.",
+        epilog="With no options: log in if needed, fetch, download, then fix the metadata.",
     )
     parser.add_argument("-l", "--login", action="store_true", help="log in to Spotify in a browser window")
     parser.add_argument("-f", "--fetch", action="store_true", help="choose playlists and rebuild their setlist.csv files")
@@ -48,6 +50,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-d", "--download", action="store_true",
         help="download the songs of the fetched setlists that aren't there yet",
+    )
+    parser.add_argument(
+        "-m", "--meta", action="store_true",
+        help="fix the metadata (tags) of the downloaded songs (-dm: download, then fix)",
+    )
+    parser.add_argument(
+        "-c", "--config", type=Path, metavar="FILE",
+        help=f"configuration file to use (default: {config.CONFIG_FILENAME} in the project folder)",
     )
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     return parser
@@ -150,15 +160,19 @@ def run_fetch(store: SessionStore, data_dir: Path, noselect: bool) -> None:
         raise CliError(f"{failed} of {len(results)} playlists couldn't be fetched.")
 
 
-def make_backend() -> DownloadBackend:
-    return get_backend()
+def make_backend(settings: Config) -> DownloadBackend:
+    try:
+        return get_backend(settings.backend, **settings.options_for(settings.backend))
+    except TypeError as exc:
+        # An option the backend doesn't take.
+        raise ConfigError(f"{settings.path}: bad setting in [backends.{settings.backend}]: {exc}") from exc
 
 
-def run_download(store: SessionStore, data_dir: Path) -> None:
+def run_download(store: SessionStore, data_dir: Path, settings: Config) -> None:
     folders = selected_folders(store, data_dir)
     if not folders:
         raise CliError("No playlists have been fetched yet; run `spotarchive --fetch` first.")
-    backend = make_backend()
+    backend = make_backend(settings)
     backend.check()
     for warning in backend.warnings():
         ui.warn(warning)
@@ -226,26 +240,108 @@ def _download_with_progress(backend: DownloadBackend, name: str, folder: Path) -
     return result
 
 
-def main(argv: list[str] | None = None, data_dir: Path = DEFAULT_DATA_DIR) -> int:
+def run_meta(store: SessionStore, data_dir: Path, settings: Config) -> None:
+    folders = selected_folders(store, data_dir)
+    if not folders:
+        raise CliError("No playlists have been fetched yet; run `spotarchive --fetch` first.")
+    backend = None
+    if settings.metadata_source == "backend":
+        backend = make_backend(settings)
+        if backend.can_tag:
+            backend.check()
+            ui.info(f"Fixing metadata with {backend.name}...")
+        else:
+            ui.info(f"The {backend.name} backend can't tag files; using the setlists' metadata instead.")
+            backend = None
+    if backend is None:
+        ui.info("Fixing metadata from the setlists...")
+
+    failed_songs = unfetched = 0
+    for name, folder in folders:
+        try:
+            result = _fix_with_progress(backend, name, folder)
+        except FileNotFoundError as exc:
+            unfetched += 1
+            ui.error(f"{name}: {exc}")
+            continue
+        failed_songs += len(result.failed)
+        summary = f"{name}: {result.updated} fixed, {result.unchanged} already fine"
+        if result.failed:
+            ui.warn(f"{summary}, {len(result.failed)} failed")
+        else:
+            ui.ok(summary)
+
+    problems = []
+    if failed_songs:
+        problems.append(f"{failed_songs} songs' metadata couldn't be fixed.")
+    if unfetched:
+        problems.append(f"{unfetched} playlists have no setlist; run `spotarchive --fetch` first.")
+    if problems:
+        raise CliError(" ".join(problems))
+
+
+def _fix_with_progress(backend: DownloadBackend | None, name: str, folder: Path) -> PlaylistMeta:
+    failures = []
+    with ui.progress() as bar:
+        task = bar.add_task(name, total=None)
+
+        def on_start(song, i, n):
+            bar.update(task, completed=i - 1, total=n)
+
+        def on_done(song, error):
+            bar.advance(task)
+            if error:
+                failures.append(f"{song.label}: {error}")
+
+        result = fix_playlist_metadata(name, folder, backend, on_start, on_done)
+        done = result.updated + result.unchanged + len(result.failed)
+        bar.update(task, completed=done, total=done)
+    for failure in failures:
+        ui.warn(failure)
+    return result
+
+
+def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
+    """Run the CLI; *data_dir* overrides the configured data folder (for tests)."""
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.noselect and not args.fetch:
         parser.error("--noselect only works together with --fetch (e.g. -fn)")
+    plain = not (args.login or args.fetch or args.download or args.meta)
 
     try:
+        settings = config.load(args.config)
+        data_dir = settings.data_dir if data_dir is None else data_dir
         store = SessionStore.load(data_dir)
         if args.login:
             run_login(store)
-        if args.fetch:
-            run_fetch(store, data_dir, args.noselect)
-        if args.download:
-            run_download(store, data_dir)
-        if not (args.login or args.fetch or args.download):
+        if plain:
             ensure_login(store)
             run_fetch(store, data_dir, noselect=False)
             # With nothing selected, fetching has already said so.
-            if selected_folders(store, data_dir):
-                run_download(store, data_dir)
+            if not selected_folders(store, data_dir):
+                return 0
+            args.download = args.meta = True
+        elif args.fetch:
+            run_fetch(store, data_dir, args.noselect)
+        download_error = None
+        if args.download:
+            try:
+                run_download(store, data_dir, settings)
+            except CliError as exc:
+                if not args.meta:
+                    raise
+                # Still fix the songs that did download.
+                download_error = exc
+        if args.meta:
+            try:
+                run_meta(store, data_dir, settings)
+            except CliError as exc:
+                if download_error:
+                    raise CliError(f"{download_error} {exc}") from exc
+                raise
+        if download_error:
+            raise download_error
     except KeyboardInterrupt:
         ui.warn("Cancelled.")
         return 130
@@ -255,7 +351,7 @@ def main(argv: list[str] | None = None, data_dir: Path = DEFAULT_DATA_DIR) -> in
     except RateLimited as exc:
         ui.error(rate_limit_message(exc))
         return 1
-    except (AuthError, BackendUnavailable, SessionError, SpotifyApiError, CliError) as exc:
+    except (AuthError, BackendUnavailable, ConfigError, SessionError, SpotifyApiError, CliError) as exc:
         ui.error(str(exc))
         return 1
     except requests.RequestException as exc:

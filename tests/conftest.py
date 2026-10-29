@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from spotarchive.backends import DownloadBackend, DownloadFailed
+from spotarchive import config
+from spotarchive.backends import DownloadBackend, DownloadFailed, TaggingFailed
 from spotarchive.spotify.client import PATHFINDER_URL
 
 
@@ -116,16 +117,23 @@ def tokens():
     return FakeTokens()
 
 
+# A few silent MPEG frames (128 kbps, 44.1 kHz): enough for mutagen to tag.
+SILENT_MP3 = (b"\xff\xfb\x90\x64" + b"\x00" * 413) * 4
+
+
 class FakeBackend(DownloadBackend):
-    """Writes a dummy file per song instead of downloading anything."""
+    """Writes a silent MP3 per song instead of downloading anything."""
 
     name = "fake"
     audio_extensions = frozenset({".mp3"})
 
-    def __init__(self, failing=(), unavailable=None):
+    def __init__(self, failing=(), unavailable=None, can_tag=False, tags_downloads=False):
         self.failing = set(failing)
         self.unavailable = unavailable
+        self.can_tag = can_tag
+        self.tags_downloads = tags_downloads
         self.requested = []
+        self.tagged = []
 
     def check(self):
         if self.unavailable:
@@ -136,10 +144,22 @@ class FakeBackend(DownloadBackend):
         if song.name in self.failing:
             raise DownloadFailed("not found")
         path = folder / f"YT {song.label}.mp3"
-        path.write_bytes(b"fake audio")
+        path.write_bytes(SILENT_MP3)
         return [path]
+
+    def tag(self, song, file):
+        self.tagged.append(file.name)
+        if song.name in self.failing:
+            raise TaggingFailed("not found")
 
 
 @pytest.fixture
 def backend():
     return FakeBackend()
+
+
+@pytest.fixture(autouse=True)
+def no_user_config(tmp_path_factory, monkeypatch):
+    # Never read the developer's own spotarchive.toml.
+    missing = tmp_path_factory.mktemp("config") / config.CONFIG_FILENAME
+    monkeypatch.setattr(config, "default_path", lambda: missing)
