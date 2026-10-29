@@ -9,7 +9,7 @@ Spotarchive is a cross-platform (Linux and Windows) Python CLI that caches metad
 
 ## Status
 
-Steps 1–4 of the development plan are done: docs scaffolding, the Spotify features (browser login, playlist selection, `setlist.csv` caching) and downloading through the backend interface (SomeDL), plus the install scripts from step 5. Metadata cleanup, updates and the config file don't exist yet. Update this file (especially **Commands** and **Architecture**) as code lands — don't leave it describing things that don't exist, and don't invent commands before they work.
+Steps 1–4 of the development plan are done: docs scaffolding, the Spotify features (browser login, playlist selection, `setlist.csv` caching) and downloading through the backend interface (SomeDL), plus the install scripts from step 5 and self-updating (`--update`). Metadata cleanup and the config file don't exist yet. Update this file (especially **Commands** and **Architecture**) as code lands — don't leave it describing things that don't exist, and don't invent commands before they work.
 
 Development plan order: (1) `CLAUDE.md`, (2) `docs/`, minimal `README.md` (ASCII-art name + status badges) and quickstart, (3) Spotify features, (4) download-backend features, (5) metadata cleanup, setup script and config file.
 
@@ -27,15 +27,16 @@ python -m pytest tests/test_browser_auth.py   # real headless Chromium against a
 Working CLI:
 
 ```bash
-spotarchive                  # login (if the saved one doesn't work) -> fetch with selection -> download
+spotarchive                  # update check (asks first) -> login (if the saved one doesn't work) -> fetch with selection -> download
 spotarchive -l | --login     # interactive browser login helper
 spotarchive -f | --fetch     # choose playlists and rebuild setlist.csv files; -fn / --fetch --noselect reuses previous selection
 spotarchive -d | --download  # download missing songs of the selected, fetched setlists via the backend (-fd, -fnd combine)
+spotarchive -u | --update    # compare against __version__ on GitHub main and update the git clone in place (not combinable)
 spotarchive -V | --version
 spotarchive -h | --help
 ```
 
-Still planned (see `.tmp/spec.md`): `-m | --meta` (metadata cleanup, combinable as `-dm`), `-u | --update` (compare against GitHub and update in place). Plain `spotarchive` will then also check for updates first (prompting before installing) and fix metadata after downloading.
+Still planned (see `.tmp/spec.md`): `-m | --meta` (metadata cleanup, combinable as `-dm`). Plain `spotarchive` will then also fix metadata after downloading.
 
 ## Architecture
 
@@ -52,6 +53,7 @@ Package in `src/spotarchive/` (setuptools, `pyproject.toml`; console script `spo
 - **`backends/somedl.py`** — runs `somedl --here --skip-file-check [--format F] -- "First Artist - Title"` once per song with `cwd` = playlist folder and inherited stdio (its output is the progress display). `--here` forces flat `{artist} - {song}` names regardless of the user's SomeDL config. SomeDL exits 0 even on failure, so success = a new/modified audio file (mtime diff of the folder). Queries equal to SomeDL subcommands (`import`, `web`, ...) are refused. Executable looked up next to `sys.executable`, then on PATH; `check()` also requires `ffmpeg`, and `warnings()` (non-fatal, printed before downloading) flags a missing `deno`, looked up next to `somedl` then on PATH like yt-dlp does. The `somedl` extra pulls in `yt-dlp[default,deno]` (Deno binary + challenge solver from PyPI): without a JS runtime YouTube streams often fail with HTTP 403.
 - **`download.py`** — smart downloading. Per playlist folder, `.downloads.json` maps song key -> files (helpers name files after what *they* found, so names can't be matched reliably). A song is present if a recorded file exists or an audio file's stem matches `Artist - Song` (normalized; first/all artists); name matches are written back to the record. Pending songs go to the backend one at a time; the record is saved after each song; failures are collected, not recorded, and don't stop the rest. Downloading only reads `session.json` + setlists, never Spotify.
 - **`install.sh` / `install.ps1`** (repo root) — single-command install. Use the checkout they sit in, otherwise clone into `~/spotarchive` (or `git pull --ff-only` an existing clone). They create `.venv`, `pip install -e ".[somedl]"`, run `playwright install chromium`, and install FFmpeg if it's missing, asking first (apt/dnf/pacman/zypper/apk with sudo; winget `Gyan.FFmpeg`). Then they expose the command: a symlink in `~/.local/bin` on Linux, or a `spotarchive.cmd` launcher in `%LOCALAPPDATA%\spotarchive\bin` added to the user PATH on Windows (not `.venv\Scripts`, which would shadow python/pip). Idempotent; the options are documented in `docs/quickstart.md`. `install.ps1` must not call `exit`, since that closes the window under `iex`. Keep the two scripts' behavior and options in sync.
+- **`update.py`** — self-update. `latest_version` reads `__version__` from `src/spotarchive/__init__.py` on GitHub `main` (raw.githubusercontent.com); versions compare by their numeric parts. Only a git clone can update itself (`project_root`: the checkout around the imported package; worktrees are refused). `install_update` runs `git pull --ff-only` (no credential prompts) and reinstalls (`pip install -e` with the installed extras kept) only if `pyproject.toml` changed. In `cli.py`, plain runs call `check_for_update` (never fatal; asks via `ui.confirm`, never updates without a TTY) and then `relaunch` the new code as `python -m spotarchive` with `SPOTARCHIVE_NO_UPDATE_CHECK=1`, which also lets users skip the check. **Users only get an update when `__version__` is bumped**, so bump it in PRs that should reach them. Tests fake `latest_version` in an autouse fixture in `tests/conftest.py`; `test_update.py` runs real git against local repos only.
 - **`ui.py`** — rich console output (ASCII markers so legacy Windows consoles work), questionary checkbox, progress bars.
 
 Planned:

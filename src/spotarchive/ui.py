@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 from rich.console import Console
 from rich.markup import escape
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn
@@ -26,6 +28,17 @@ def warn(message: str) -> None:
 
 def error(message: str) -> None:
     console.print(f"[bold red]error:[/] {escape(message)}")
+
+
+def can_prompt() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def confirm(question: str, default: bool = True) -> bool | None:
+    """Yes/no prompt; returns ``None`` if cancelled."""
+    import questionary
+
+    return questionary.confirm(question, default=default).ask()
 
 
 def choose_playlists(playlists: list[Playlist], preselected: list[str]) -> list[str] | None:

@@ -1,7 +1,7 @@
 # Quickstart
 
 > [!WARNING]
-> Spotarchive is still being built. Steps 1–4 and the install script work today; metadata cleanup (`--meta`) and the all-in-one run's update and metadata steps are planned.
+> Spotarchive is still being built. Everything on this page works today except metadata cleanup (`--meta`), which is planned, along with the all-in-one run's metadata step.
 
 ## Legal note
 
@@ -97,7 +97,9 @@ Cleaning up metadata afterwards with `--meta` (`-dm` together) is planned.
 spotarchive
 ```
 
-Logs in if needed, then fetches (asking which playlists) and downloads. Checking for updates first and fixing metadata at the end are planned.
+Checks GitHub for a newer version first and asks before installing it. Then it logs in if needed, fetches (asking which playlists) and downloads. Fixing metadata at the end is planned.
+
+To update at any time, run `spotarchive --update` (`-u`). Details: [Updating](updating.md).
 
 ## Next steps
 
