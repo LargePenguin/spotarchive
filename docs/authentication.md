@@ -10,14 +10,13 @@ spotarchive --login
 
 1. A browser window opens at Spotify's login page.
 2. Log in as usual (email, phone, Google, Facebook, Apple or a one-time code all work), solving a captcha if Spotify asks for one.
-3. Close the browser window.
-4. Spotarchive reads the login from the window's profile in the background and saves it.
+3. Once Spotify sends the window on to the web player (`open.spotify.com`), Spotarchive reads the login from it, closes the window by itself and saves the login. There's no need to close it yourself.
 
-The login helper waits up to 10 minutes for the window to be closed. Closing it without logging in cancels the login.
+The login helper waits up to 10 minutes for you to log in. Closing the window before logging in cancels the login. If you open the web player without being logged in, the window stays open so you can still log in from there.
 
 Running plain `spotarchive` checks the saved login first and only opens the browser when there is no working login.
 
-The login window is an ordinary browser window with a profile of its own (it doesn't touch your normal browser profile or its logins). Spotarchive doesn't control it while you log in: automated browsers get stuck in endless captchas on Spotify's login page. The profile is kept, so Spotify recognizes the device the next time you log in.
+The login window is an ordinary browser window with a profile of its own (it doesn't touch your normal browser profile or its logins). Spotarchive doesn't control it while you log in: automated browsers get stuck in endless captchas on Spotify's login page. It only asks the window, through a local DevTools port, which page it's on; it connects to the window to read the cookies once you've reached the web player. The profile is kept, so Spotify recognizes the device the next time you log in.
 
 ## Which browser is used
 
@@ -27,7 +26,7 @@ For the login window, Spotarchive uses the first of these it finds:
 2. Microsoft Edge (preinstalled on Windows)
 3. Playwright's bundled Chromium (`python -m playwright install chromium`)
 
-Reading the login afterwards and [refreshing tokens](#how-tokens-are-refreshed) happen in a hidden (headless) browser started through [Playwright](https://playwright.dev/python/). Token refreshes try Playwright's bundled Chromium, then Chrome, then Edge; if none of them can be started, the error message lists why each one failed.
+Getting the first access token after logging in and [refreshing tokens](#how-tokens-are-refreshed) happen in a hidden (headless) browser started through [Playwright](https://playwright.dev/python/). Token refreshes try Playwright's bundled Chromium, then Chrome, then Edge; if none of them can be started, the error message lists why each one failed.
 
 ## What is stored
 
@@ -60,6 +59,7 @@ If the cookies themselves have expired (Spotify only issues a logged-out token),
 - **"Couldn't start a browser"**: run `python -m playwright install chromium` (on Linux, `python -m playwright install --with-deps chromium` also installs the system libraries Chromium needs), or install Chrome or Edge.
 - **Captchas keep coming back, or "Something went wrong"** on the login page: wait a few minutes before trying again, and if it persists install Google Chrome, which Spotarchive prefers over Playwright's Chromium. Spotarchive never drives the login window, so this is Spotify being cautious about the network or a brand-new profile, not about automation.
 - **"The browser was closed before the login finished"**: the window was closed before Spotify logged you in; run `spotarchive --login` again. If a browser window from a previous attempt is still open, close it first.
+- **The window doesn't close after logging in**: Spotarchive waits for the window to reach `open.spotify.com`. If Spotify leaves you on an account page instead, open <https://open.spotify.com/> in the same window.
 - **"The saved Spotify login has expired"**: run `spotarchive --login`.
 - **"Can't read the session file"**: the file is damaged; delete `data/session.json` and log in again. Your playlist selection will need to be made again too.
 

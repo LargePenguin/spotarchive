@@ -104,8 +104,12 @@ def test_login_browser_is_not_automated(tmp_path):
     assert cmd[0] == str(Path("/fake/chrome"))
     assert f"--user-data-dir={tmp_path / 'profile'}" in cmd
     assert cmd[-1] == LOGIN_URL
-    # Flags that make Spotify's captcha treat the window as a bot.
-    assert not any(arg.startswith(("--enable-automation", "--remote-debugging", "--headless")) for arg in cmd)
+    # Flags that make Spotify's captcha treat the window as a bot. A DevTools
+    # port alone is fine: it's only polled for tab URLs during the login.
+    assert not any(arg.startswith(("--enable-automation", "--remote-debugging-pipe", "--headless")) for arg in cmd)
+    assert "--remote-debugging-port=0" in cmd
+    # ...but it turns navigator.webdriver on unless this is set.
+    assert "--disable-blink-features=AutomationControlled" in cmd
 
 
 def test_installed_browsers_on_linux(tmp_path, monkeypatch):

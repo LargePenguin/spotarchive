@@ -39,7 +39,7 @@ The last command downloads the browser used for logging in. You can skip it if G
 spotarchive --login
 ```
 
-A browser window opens at Spotify's login page. Sign in, then close the window; Spotarchive then captures the session and caches it in the data folder. Running plain `spotarchive` starts this step automatically if there is no working login. Never share or commit the session file. Details: [Authentication](authentication.md).
+A browser window opens at Spotify's login page. Sign in; once Spotify forwards you to the web player, Spotarchive closes the window by itself, captures the session and caches it in the data folder. Running plain `spotarchive` starts this step automatically if there is no working login. Never share or commit the session file. Details: [Authentication](authentication.md).
 
 ## 3. Fetch your playlists
 

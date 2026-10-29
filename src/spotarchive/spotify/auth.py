@@ -1,29 +1,35 @@
 """Browser-based Spotify login.
 
 Spotarchive never asks for your password. It opens a normal browser window
-at Spotify's login page, with a profile of its own, and once you've signed in
-and closed the window it reads from that profile:
+at Spotify's login page, with a profile of its own. Once Spotify redirects the
+window to the web player, it reads from the running window:
 
-* the spotify.com cookies (``sp_dc`` is the long-lived login cookie),
-* the browser's user agent, and
-* the short-lived access token the Spotify web player fetches for itself.
+* the spotify.com cookies (``sp_dc`` is the long-lived login cookie) and
+* the browser's user agent,
+
+then closes the window and has a headless browser load the web player with
+those cookies to get the short-lived access token it fetches for itself.
 
 The login window is started as a plain process, not driven by Playwright: an
-automated browser (``navigator.webdriver``, a throwaway profile, a DevTools
-connection) gets stuck in endless captchas on Spotify's login page.
-Playwright only opens the profile afterwards, headlessly, to read the result.
+automated browser (``navigator.webdriver``, a throwaway profile, a debugger
+attached to the page) gets stuck in endless captchas on Spotify's login page.
+While the user logs in, spotarchive only polls the window's DevTools HTTP
+endpoint for the URLs of its tabs; it connects over DevTools once the window
+has reached the web player.
 
-When the token expires, the cookies are replayed in a headless browser so
-the web player hands out a fresh one. Letting the real web player mint the
+The same headless step runs again whenever the token expires, so the web
+player hands out a fresh one. Letting the real web player mint the
 token avoids re-implementing Spotify's token endpoint, which changes often.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
 import time
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
@@ -37,16 +43,22 @@ LOGIN_COOKIE = "sp_dc"
 TOKEN_PATHS = ("/api/token", "/get_access_token")
 
 LOGIN_TIMEOUT_S = 600
+# How long a window on the web player may lack the login cookie before it
+# counts as not logged in (yet).
+LOGIN_COOKIE_WAIT_S = 3
+CLOSE_TIMEOUT_S = 10
 REFRESH_TIMEOUT_S = 60
 # How long an anonymous token may stand alone before the cookies are
 # considered logged out.
 ANONYMOUS_GRACE_S = 5
 POLL_MS = 500
+# Where Chromium writes the DevTools port it picked for --remote-debugging-port=0.
+DEBUG_PORT_FILE = "DevToolsActivePort"
 
 # Browsers to try for headless token refreshes, in order: Playwright's
 # bundled Chromium, then installed Chrome and Edge (always present on Windows).
 BROWSER_CHANNELS = (None, "chrome", "msedge")
-# Keep navigator.webdriver false in the headless browsers too.
+# Keep navigator.webdriver false in the headless browsers and the login window.
 STEALTH_ARGS = ["--disable-blink-features=AutomationControlled"]
 STEALTH_IGNORED_DEFAULTS = ["--enable-automation"]
 
@@ -214,13 +226,21 @@ def _login_browser(playwright) -> Path:
 
 
 def login_browser_command(executable: Path, profile_dir: Path, url: str) -> list[str]:
-    """A plain (not automated) browser window on its own profile."""
+    """A plain (not automated) browser window on its own profile.
+
+    The DevTools port (picked by the browser, see :func:`read_debug_port`)
+    only lets spotarchive see which page the window is on; nothing attaches
+    to the page while the user logs in.
+    """
     return [
         str(executable),
         f"--user-data-dir={profile_dir}",
+        "--remote-debugging-port=0",
+        # The DevTools port alone turns navigator.webdriver on.
+        *STEALTH_ARGS,
         "--no-first-run",
         "--no-default-browser-check",
-        # Encrypt cookies the way Playwright reads them back (Linux/macOS).
+        # Keep the profile's cookies out of the system keyring (no prompt).
         "--password-store=basic",
         "--use-mock-keychain",
         "--new-window",
@@ -228,27 +248,124 @@ def login_browser_command(executable: Path, profile_dir: Path, url: str) -> list
     ]
 
 
-def open_login_browser(executable: Path, profile_dir: Path, url: str, timeout_s: int) -> None:
-    """Open the login window and wait until the user closes it."""
+def read_debug_port(profile_dir: Path) -> int | None:
+    """The DevTools port the browser on *profile_dir* listens on, once it's up."""
     try:
-        process = subprocess.Popen(
-            login_browser_command(executable, profile_dir, url),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError as exc:
-        raise BrowserUnavailable(f"Couldn't start {executable}: {exc}") from exc
+        first_line = (Path(profile_dir) / DEBUG_PORT_FILE).read_text().splitlines()[0]
+        return int(first_line)
+    except (OSError, IndexError, ValueError):
+        return None
+
+
+class LoginWindow(Protocol):
+    def is_open(self) -> bool: ...
+    def debug_port(self) -> int | None: ...
+    def close(self) -> None: ...
+
+
+class BrowserProcess:
+    """The login window, started as a plain browser process."""
+
+    def __init__(self, executable: Path, profile_dir: Path, url: str):
+        self.profile_dir = profile_dir
+        try:
+            self._process = subprocess.Popen(
+                login_browser_command(executable, profile_dir, url),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            raise BrowserUnavailable(f"Couldn't start {executable}: {exc}") from exc
+
+    def is_open(self) -> bool:
+        return self._process.poll() is None
+
+    def debug_port(self) -> int | None:
+        return read_debug_port(self.profile_dir)
+
+    def close(self) -> None:
+        """Wait briefly for the browser to exit (it's asked to quit over
+        DevTools first, which saves its profile cleanly), then stop it."""
+        try:
+            self._process.wait(timeout=CLOSE_TIMEOUT_S)
+            return
+        except subprocess.TimeoutExpired:
+            self._process.terminate()
+        try:
+            self._process.wait(timeout=CLOSE_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            self._process.kill()
+
+
+def open_login_browser(executable: Path, profile_dir: Path, url: str) -> LoginWindow:
+    return BrowserProcess(executable, profile_dir, url)
+
+
+def is_web_player_url(url: str) -> bool:
+    return urlparse(url).hostname == "open.spotify.com"
+
+
+def _page_urls(port: int) -> list[str]:
+    """URLs of the window's tabs, from the DevTools HTTP endpoint.
+
+    This plain HTTP request doesn't attach a debugger to any page.
+    """
     try:
-        process.wait(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        raise LoginCancelled(f"The browser was still open after {timeout_s // 60} minutes.") from None
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2) as response:
+            targets = json.load(response)
+    except (OSError, ValueError):
+        return []
+    return [t.get("url", "") for t in targets if isinstance(t, dict) and t.get("type") == "page"]
+
+
+def _read_live_login(playwright, port: int) -> tuple[list[dict], str] | None:
+    """Read the login cookies and user agent from the running window.
+
+    Returns None (and leaves the window alone) when it holds no login yet.
+    On success the window is asked to quit.
+    """
+    browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+    try:
+        cdp = browser.new_browser_cdp_session()
+        context = browser.contexts[0]
+        cookies: list[dict] = []
+        # Spotify sets sp_dc while logging in, but the redirect may win the race.
+        deadline = time.monotonic() + LOGIN_COOKIE_WAIT_S
+        while time.monotonic() < deadline:
+            cookies = spotify_cookies(context.cookies())
+            if has_login_cookie(cookies):
+                break
+            time.sleep(POLL_MS / 1000)
+        else:
+            return None
+        user_agent = cdp.send("Browser.getVersion")["userAgent"]
+        cdp.send("Browser.close")
+        return cookies, user_agent
     finally:
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                process.kill()
+        try:
+            browser.close()  # only disconnects from a browser it didn't launch
+        except Exception:
+            pass
+
+
+def _wait_for_login(playwright, window: LoginWindow, timeout_s: int) -> tuple[list[dict], str]:
+    """Wait until the window lands on the web player with a login."""
+    deadline = time.monotonic() + timeout_s
+    was_on_player = False
+    while time.monotonic() < deadline:
+        if not window.is_open():
+            raise LoginCancelled("The browser was closed before the login finished.")
+        port = window.debug_port()
+        on_player = bool(port) and any(is_web_player_url(u) for u in _page_urls(port))
+        # Check once per arrival on the web player, so nothing attaches to the
+        # browser while the user is still on the login page.
+        if on_player and not was_on_player:
+            found = _read_live_login(playwright, port)
+            if found:
+                return found
+        was_on_player = on_player
+        time.sleep(POLL_MS / 1000)
+    raise LoginCancelled(f"The login didn't finish within {timeout_s // 60} minutes.")
 
 
 def _prepare_profile(profile_dir: Path) -> None:
@@ -256,22 +373,25 @@ def _prepare_profile(profile_dir: Path) -> None:
     if os.name == "posix":
         # The profile holds the login cookies.
         os.chmod(profile_dir, 0o700)
+    # A port file left over from an earlier run would point at a dead browser.
+    (profile_dir / DEBUG_PORT_FILE).unlink(missing_ok=True)
 
 
 def interactive_login(
     profile_dir: Path,
     timeout_s: int = LOGIN_TIMEOUT_S,
     on_status: Callable[[str], None] = lambda msg: None,
-    open_browser: Callable[[Path, Path, str, int], None] = open_login_browser,
+    open_browser: Callable[[Path, Path, str], LoginWindow] = open_login_browser,
     configure_context: Callable[[object], None] | None = None,
 ) -> SpotifySession:
     """Let the user log in in a normal browser window, then capture the session.
 
-    The window uses *profile_dir* as its profile, which is kept so Spotify
-    recognises the device on later logins. *open_browser* (which returns once
-    the window is closed) and *configure_context* (called with the headless
-    context that reads the profile, e.g. to route requests to fakes) exist
-    for tests.
+    The login counts as done when the window is redirected to the web player
+    with Spotify's login cookie set; the cookies and user agent are read from
+    the running window, which is then closed. The window uses *profile_dir*
+    as its profile, which is kept so Spotify recognises the device on later
+    logins. *open_browser* and *configure_context* (passed on to
+    :func:`refresh_session`, e.g. to route requests to fakes) exist for tests.
     """
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import sync_playwright
@@ -280,48 +400,24 @@ def interactive_login(
     _prepare_profile(profile_dir)
     with sync_playwright() as p:
         executable = _login_browser(p)
+        window = open_browser(executable, profile_dir, LOGIN_URL)
         on_status(
-            "Log in to Spotify in the browser window that just opened, "
-            "then close the window to continue."
+            "Log in to Spotify in the browser window that just opened; "
+            "it closes by itself once you're logged in."
         )
-        open_browser(executable, profile_dir, LOGIN_URL, timeout_s)
-
-        on_status("Reading the login from the browser profile...")
         try:
-            context = p.chromium.launch_persistent_context(
-                str(profile_dir),
-                executable_path=str(executable),
-                headless=True,
-                args=STEALTH_ARGS,
-                ignore_default_args=STEALTH_IGNORED_DEFAULTS,
-            )
-        except PlaywrightError as exc:
-            raise AuthError(
-                "Couldn't open the login browser profile; make sure the login "
-                f"window is closed: {str(exc).splitlines()[0]}"
-            ) from exc
-        try:
-            if configure_context:
-                configure_context(context)
-            if not has_login_cookie(spotify_cookies(context.cookies())):
-                raise LoginCancelled("The browser was closed before the login finished.")
-            info = _web_player_token(context, REFRESH_TIMEOUT_S)
-            if info is None:
-                raise LoginCancelled("The browser was closed before the login finished.")
-            user_agent = context.pages[0].evaluate("navigator.userAgent")
-            return SpotifySession(
-                cookies=spotify_cookies(context.cookies()),
-                user_agent=normalize_user_agent(user_agent),
-                access_token=info.access_token,
-                expires_at_ms=info.expires_at_ms,
-            )
+            cookies, user_agent = _wait_for_login(p, window, timeout_s)
         except PlaywrightError as exc:
             raise AuthError(f"Reading the login failed: {str(exc).splitlines()[0]}") from exc
         finally:
-            try:
-                context.close()
-            except PlaywrightError:
-                pass
+            window.close()
+
+    on_status("Logged in; getting an access token...")
+    session = SpotifySession(cookies=cookies, user_agent=normalize_user_agent(user_agent))
+    try:
+        return refresh_session(session, configure_context=configure_context)
+    except LoginRequired:
+        raise AuthError("Spotify didn't accept the new login; try logging in again.") from None
 
 
 def refresh_session(
