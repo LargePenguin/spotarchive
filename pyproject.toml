@@ -35,3 +35,6 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Import from this checkout's src/, not whatever the virtualenv has installed
+# (worktrees share the project root's .venv).
+pythonpath = ["src"]
