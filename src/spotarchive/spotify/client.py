@@ -20,12 +20,21 @@ MAX_BACKOFF_S = 60
 REQUEST_TIMEOUT_S = 30
 
 ProgressCallback = Callable[[int, "int | None"], None]
+WaitCallback = Callable[[float], None]
 
 
 class SpotifyApiError(Exception):
     def __init__(self, status: int, message: str):
         super().__init__(f"Spotify API error {status}: {message}")
         self.status = status
+
+
+class RateLimited(SpotifyApiError):
+    """Spotify asked to wait longer than is worth waiting for."""
+
+    def __init__(self, message: str, retry_after_s: float | None):
+        super().__init__(429, message)
+        self.retry_after_s = retry_after_s
 
 
 class SpotifyClient:
@@ -35,11 +44,14 @@ class SpotifyClient:
         user_agent: str = "",
         http: requests.Session | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        on_wait: WaitCallback = lambda seconds: None,
     ):
         self.tokens = tokens
         self.user_agent = user_agent
         self.http = http or requests.Session()
         self._sleep = sleep
+        # Called with the delay before each retry, so a slow run says why.
+        self._on_wait = on_wait
 
     def _get(self, url: str, params: dict | None = None) -> dict:
         if not url.startswith("http"):
@@ -59,8 +71,15 @@ class SpotifyClient:
                 self.tokens.get_token(force_refresh=True)
                 refreshed = True
                 continue
+            if resp.status_code == 429:
+                retry_after = _retry_after(resp)
+                # Spotify can ask for hours; fail now instead of looking hung.
+                if retries >= MAX_RETRIES or (retry_after or 0) > MAX_BACKOFF_S:
+                    raise RateLimited(_error_message(resp), retry_after)
             if (resp.status_code == 429 or resp.status_code >= 500) and retries < MAX_RETRIES:
-                self._sleep(_backoff(resp, retries))
+                delay = _backoff(resp, retries)
+                self._on_wait(delay)
+                self._sleep(delay)
                 retries += 1
                 continue
             if not resp.ok:
@@ -119,11 +138,18 @@ class SpotifyClient:
         return tracks
 
 
-def _backoff(resp: requests.Response, retries: int) -> float:
+def _retry_after(resp: requests.Response) -> float | None:
     try:
-        return min(float(resp.headers["Retry-After"]) + 1, MAX_BACKOFF_S)
+        return float(resp.headers["Retry-After"])
     except (KeyError, ValueError):
-        return min(2 ** retries, MAX_BACKOFF_S)
+        return None
+
+
+def _backoff(resp: requests.Response, retries: int) -> float:
+    retry_after = _retry_after(resp)
+    if retry_after is not None:
+        return min(retry_after + 1, MAX_BACKOFF_S)
+    return min(2 ** retries, MAX_BACKOFF_S)
 
 
 def _error_message(resp: requests.Response) -> str:

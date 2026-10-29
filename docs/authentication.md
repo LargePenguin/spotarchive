@@ -61,6 +61,7 @@ If the cookies themselves have expired (Spotify only issues a logged-out token),
 - **"The browser was closed before the login finished"**: the window was closed before Spotify logged you in; run `spotarchive --login` again. If a browser window from a previous attempt is still open, close it first.
 - **The window doesn't close after logging in**: Spotarchive waits for the window to reach `open.spotify.com`. If Spotify leaves you on an account page instead, open <https://open.spotify.com/> in the same window.
 - **"The saved Spotify login has expired"**: run `spotarchive --login`.
+- **"Spotify is rate-limiting this login's requests"**: Spotify's Web API refused the request with `429`. Short waits (up to a minute) are retried automatically with a message for each wait. If Spotify asks for a longer wait, Spotarchive stops right away and says how long. The login is still saved, so run Spotarchive again later without logging in again.
 - **"Can't read the session file"**: the file is damaged; delete `data/session.json` and log in again. Your playlist selection will need to be made again too.
 
 Back to the [documentation index](README.md).

@@ -1,7 +1,7 @@
 import pytest
 
 from conftest import FakeResponse, page, track_json
-from spotarchive.spotify.client import API_URL, SpotifyApiError, SpotifyClient
+from spotarchive.spotify.client import API_URL, MAX_RETRIES, RateLimited, SpotifyApiError, SpotifyClient
 from spotarchive.spotify.models import LIKED_SONGS_ID, Playlist, Track
 
 
@@ -38,6 +38,33 @@ def test_retries_rate_limits_using_retry_after(http, tokens):
     http.add("/me", FakeResponse(429, headers={"Retry-After": "3"}), FakeResponse(200, {"id": "fake-user"}))
     client.current_user()
     assert waits == [4]
+
+
+def test_reports_each_wait(http, tokens):
+    reported = []
+    client = SpotifyClient(tokens, http=http, sleep=lambda s: None, on_wait=reported.append)
+    http.add("/me", FakeResponse(429, headers={"Retry-After": "3"}), FakeResponse(200, {"id": "fake-user"}))
+    client.current_user()
+    assert reported == [4]
+
+
+def test_long_retry_after_fails_without_waiting(http, tokens):
+    waits = []
+    client = SpotifyClient(tokens, http=http, sleep=waits.append)
+    http.add("/me", FakeResponse(429, {"error": {"message": "API rate limit exceeded"}}, headers={"Retry-After": "86400"}))
+    with pytest.raises(RateLimited) as exc:
+        client.current_user()
+    assert waits == []
+    assert exc.value.status == 429
+    assert exc.value.retry_after_s == 86400
+
+
+def test_rate_limit_without_retry_after_gives_up_after_max_retries(client, http):
+    http.add("/me", FakeResponse(429))
+    with pytest.raises(RateLimited) as exc:
+        client.current_user()
+    assert exc.value.retry_after_s is None
+    assert len(http.calls) == MAX_RETRIES + 1
 
 
 def test_gives_up_after_max_retries(client, http):

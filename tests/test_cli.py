@@ -4,7 +4,7 @@ from spotarchive import cli, ui
 from spotarchive.session import PlaylistState, SessionStore, SpotifySession
 from spotarchive.setlist import read_setlist
 from spotarchive.spotify.auth import LoginRequired
-from spotarchive.spotify.client import SpotifyApiError
+from spotarchive.spotify.client import RateLimited, SpotifyApiError
 from spotarchive.spotify.models import Playlist, Track
 
 
@@ -182,3 +182,23 @@ def test_default_run_relogs_in_when_login_expired(logged_in, fake_client, monkey
     monkeypatch.setattr(cli, "interactive_login", login)
     assert cli.main([], data_dir=logged_in) == 0
     assert calls == [1]
+
+
+def rate_limited():
+    raise RateLimited("API rate limit exceeded", retry_after_s=7200)
+
+
+def test_login_is_kept_when_rate_limited(tmp_path, fake_client, monkeypatch, capsys):
+    fake_login(monkeypatch, [])
+    fake_client.current_user = rate_limited
+    assert cli.main(["-l"], data_dir=tmp_path) == 1
+    assert SessionStore.load(tmp_path).spotify.access_token == "dummy-token"
+    out = capsys.readouterr().out
+    assert "rate-limiting" in out
+    assert "about 2 hours" in out
+
+
+def test_rate_limit_doesnt_trigger_relogin(logged_in, fake_client, monkeypatch):
+    monkeypatch.setattr(cli, "interactive_login", lambda *a, **kw: pytest.fail("should not log in"))
+    fake_client.current_user = rate_limited
+    assert cli.main([], data_dir=logged_in) == 1

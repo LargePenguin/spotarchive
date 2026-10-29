@@ -16,7 +16,7 @@ from spotarchive.spotify.auth import (
     SessionTokenProvider,
     interactive_login,
 )
-from spotarchive.spotify.client import SpotifyApiError, SpotifyClient
+from spotarchive.spotify.client import RateLimited, SpotifyApiError, SpotifyClient
 
 
 # Profile of the login browser window, next to session.json.
@@ -49,12 +49,34 @@ def build_parser() -> argparse.ArgumentParser:
 def make_client(store: SessionStore) -> SpotifyClient:
     if store.spotify is None:
         raise LoginRequired("Not logged in to Spotify.")
-    return SpotifyClient(SessionTokenProvider(store), user_agent=store.spotify.user_agent)
+    return SpotifyClient(
+        SessionTokenProvider(store),
+        user_agent=store.spotify.user_agent,
+        on_wait=lambda s: ui.warn(f"Spotify is rate-limiting requests; retrying in {s:.0f}s..."),
+    )
+
+
+def rate_limit_message(exc: RateLimited) -> str:
+    wait = ""
+    if exc.retry_after_s:
+        wait = f" Spotify asked to wait {_duration(exc.retry_after_s)}."
+    return f"Spotify is rate-limiting this login's requests ({exc}).{wait} Try again later."
+
+
+def _duration(seconds: float) -> str:
+    minutes = round(seconds / 60)
+    if minutes < 2:
+        return f"{seconds:.0f} seconds"
+    if minutes < 120:
+        return f"about {minutes} minutes"
+    return f"about {round(minutes / 60)} hours"
 
 
 def run_login(store: SessionStore) -> None:
     ui.info("Opening a browser for the Spotify login...")
     store.spotify = interactive_login(store.path.parent / BROWSER_PROFILE_DIRNAME, on_status=ui.info)
+    # Keep the login even if the next request fails (e.g. rate limiting).
+    store.save()
     user = make_client(store).current_user()
     store.spotify.user_id = user.get("id")
     store.spotify.display_name = user.get("display_name") or user.get("id")
@@ -69,6 +91,9 @@ def ensure_login(store: SessionStore) -> None:
         return
     try:
         make_client(store).current_user()
+    except RateLimited:
+        # The login is fine; logging in again wouldn't help.
+        raise
     except (AuthError, SpotifyApiError) as exc:
         ui.warn(f"The saved Spotify login doesn't work ({exc}).")
         run_login(store)
@@ -138,6 +163,9 @@ def main(argv: list[str] | None = None, data_dir: Path = DEFAULT_DATA_DIR) -> in
         return 130
     except LoginRequired as exc:
         ui.error(f"{exc} Run `spotarchive --login` to log in.")
+        return 1
+    except RateLimited as exc:
+        ui.error(rate_limit_message(exc))
         return 1
     except (AuthError, SessionError, SpotifyApiError, CliError) as exc:
         ui.error(str(exc))
