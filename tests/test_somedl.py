@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -107,3 +108,27 @@ def test_check_needs_ffmpeg(monkeypatch):
     with pytest.raises(BackendUnavailable, match="FFmpeg"):
         found.check()
     assert found.executable == "/fake/somedl"
+
+
+def test_warns_without_deno(monkeypatch):
+    monkeypatch.setattr(somedl.shutil, "which", lambda name, path=None: None)
+    assert "Deno" in SomeDLBackend("/fake/bin/somedl").warnings()[0]
+
+
+def test_deno_next_to_somedl_is_enough(monkeypatch):
+    # Like yt-dlp, which finds Deno in SomeDL's own environment without PATH.
+    folder = str(Path("/fake/bin/somedl").resolve().parent)
+    looked_in = []
+
+    def which(name, path=None):
+        looked_in.append(path)
+        return "/fake/bin/deno" if path == folder else None
+
+    monkeypatch.setattr(somedl.shutil, "which", which)
+    assert SomeDLBackend("/fake/bin/somedl").warnings() == []
+    assert looked_in == [folder]
+
+
+def test_deno_on_path_is_enough(monkeypatch):
+    monkeypatch.setattr(somedl.shutil, "which", lambda name, path=None: None if path else "/usr/bin/deno")
+    assert SomeDLBackend("/fake/bin/somedl").warnings() == []

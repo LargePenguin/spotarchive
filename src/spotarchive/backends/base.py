@@ -73,6 +73,10 @@ class DownloadBackend(ABC):
     def check(self) -> None:
         """Raise :class:`BackendUnavailable` if the backend can't run."""
 
+    def warnings(self) -> list[str]:
+        """Problems worth mentioning that don't stop downloads (called after :meth:`check`)."""
+        return []
+
     @abstractmethod
     def download(self, song: Song, folder: Path) -> list[Path]:
         """Download *song* into *folder* and return the new audio files.

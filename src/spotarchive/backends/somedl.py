@@ -50,6 +50,20 @@ class SomeDLBackend(DownloadBackend):
                 "See docs/backends.md#somedl."
             )
 
+    def warnings(self) -> list[str]:
+        # yt-dlp looks for Deno in its own Python's scripts folder, then on
+        # PATH; SomeDL's folder stands in for the first one (resolved, since
+        # pipx links `somedl` from its own virtualenv into ~/.local/bin).
+        folder = str(Path(self.executable).resolve().parent) if self.executable else None
+        if (folder and shutil.which("deno", path=folder)) or shutil.which("deno"):
+            return []
+        return [
+            "Deno isn't installed. yt-dlp, which SomeDL downloads with, needs it for YouTube; "
+            "without it downloads may fail with HTTP 403. "
+            'Install it with `pip install "yt-dlp[default,deno]"` next to SomeDL. '
+            "See docs/backends.md#troubleshooting."
+        ]
+
     def command(self, song: Song) -> list[str]:
         query = song_query(song)
         if query in _SUBCOMMANDS:

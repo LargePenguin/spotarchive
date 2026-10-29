@@ -160,6 +160,8 @@ def run_download(store: SessionStore, data_dir: Path) -> None:
         raise CliError("No playlists have been fetched yet; run `spotarchive --fetch` first.")
     backend = make_backend()
     backend.check()
+    for warning in backend.warnings():
+        ui.warn(warning)
 
     failed_songs = unfetched = 0
     for name, folder in folders:

@@ -279,6 +279,15 @@ def test_unavailable_backend_is_reported(logged_in, fake_client, fake_backend, m
     assert fake_backend.requested == []
 
 
+def test_backend_warnings_dont_stop_downloads(logged_in, fake_client, fake_backend, monkeypatch, capsys):
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    monkeypatch.setattr(fake_backend, "warnings", lambda: ["Deno isn't installed."])
+    assert cli.main(["-d"], data_dir=logged_in) == 0
+    assert "Deno isn't installed." in capsys.readouterr().out
+    assert fake_backend.requested == ["Song A", "Song B"]
+
+
 def test_backend_with_own_output_gets_a_line_per_song(logged_in, fake_client, fake_backend, monkeypatch, capsys):
     choose(monkeypatch, ["p1"])
     cli.main(["-f"], data_dir=logged_in)
