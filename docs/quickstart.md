@@ -1,7 +1,7 @@
 # Quickstart
 
 > [!WARNING]
-> Spotarchive is still being built. This page is a stub that outlines the intended setup flow; commands below do not work yet.
+> Spotarchive is still being built. Steps 1–3 work today; downloading (step 4), the all-in-one run's download/metadata/update steps and the install script are planned.
 
 ## Legal note
 
@@ -16,7 +16,22 @@ Spotarchive never acquires music from Spotify. The only data taken from Spotify 
 
 ## 1. Install
 
-A single-command install script will fetch dependencies and initialize the project. *(Planned; not available yet.)*
+A single-command install script will fetch dependencies and initialize the project. *(Planned; not available yet.)* Until then, install from a clone:
+
+```bash
+git clone https://github.com/LargePenguin/spotarchive.git
+cd spotarchive
+python -m venv .venv
+```
+
+Activate the virtualenv (`source .venv/bin/activate` on Linux, `.venv\Scripts\activate` on Windows), then:
+
+```bash
+pip install -e .
+python -m playwright install chromium
+```
+
+The last command downloads the browser used for logging in. You can skip it if Google Chrome or Microsoft Edge is installed; see [which browser is used](authentication.md#which-browser-is-used).
 
 ## 2. Log in
 
@@ -24,7 +39,7 @@ A single-command install script will fetch dependencies and initialize the proje
 spotarchive --login
 ```
 
-A browser opens at Spotify's login page. After you sign in, Spotarchive captures the session and caches it in the data folder. Running plain `spotarchive` starts this step automatically if there is no working login. Never share or commit the session file.
+A browser window opens at Spotify's login page. Sign in; once Spotify forwards you to the web player, Spotarchive closes the window by itself, captures the session and caches it in the data folder. Running plain `spotarchive` starts this step automatically if there is no working login. Never share or commit the session file. Details: [Authentication](authentication.md).
 
 ## 3. Fetch your playlists
 
@@ -32,7 +47,7 @@ A browser opens at Spotify's login page. After you sign in, Spotarchive captures
 spotarchive --fetch
 ```
 
-Choose which playlists to cache. Each gets a folder under the download folder (default `data/`, e.g. `data/MyPlaylistName/`) containing a `setlist.csv` with name, artist, album, release date and date added. Use `--fetch --noselect` (`-fn`) to reuse your previous selection.
+Choose which playlists to cache. Each gets a folder under the download folder (default `data/`, e.g. `data/MyPlaylistName/`) containing a `setlist.csv` with name, artist, album, release date and date added (plus duration and Spotify link). Use `--fetch --noselect` (`-fn`) to reuse your previous selection. Details: [Fetching playlists](fetching.md).
 
 ## 4. Download
 

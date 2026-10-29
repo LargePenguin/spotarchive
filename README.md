@@ -21,7 +21,7 @@
 Archiver for Spotify and YouTube Music: cache your playlists' metadata, then legally source the songs through a swappable download backend.
 
 > [!WARNING]
-> Early development: nothing is implemented yet.
+> Early development: Spotify login and playlist fetching work; downloading is not implemented yet.
 
 ## Features
 
