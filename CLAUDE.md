@@ -9,7 +9,7 @@ Spotarchive is a cross-platform (Linux and Windows) Python CLI that caches metad
 
 ## Status
 
-Steps 1–3 of the development plan are done: docs scaffolding and the Spotify features (browser login, playlist selection, `setlist.csv` caching). Downloading, metadata cleanup, updates, the config file and the install script don't exist yet. Update this file (especially **Commands** and **Architecture**) as code lands — don't leave it describing things that don't exist, and don't invent commands before they work.
+Steps 1–4 of the development plan are done: docs scaffolding, the Spotify features (browser login, playlist selection, `setlist.csv` caching) and downloading through the backend interface (SomeDL). Metadata cleanup, updates, the config file and the install script don't exist yet. Update this file (especially **Commands** and **Architecture**) as code lands — don't leave it describing things that don't exist, and don't invent commands before they work.
 
 Development plan order: (1) `CLAUDE.md`, (2) `docs/`, minimal `README.md` (ASCII-art name + status badges) and quickstart, (3) Spotify features, (4) download-backend features, (5) metadata cleanup, setup script and config file.
 
@@ -18,7 +18,7 @@ Development plan order: (1) `CLAUDE.md`, (2) `docs/`, minimal `README.md` (ASCII
 Setup (until the install script exists), from the repo root with the virtualenv active:
 
 ```bash
-pip install -e ".[dev]"                 # package + pytest
+pip install -e ".[dev,somedl]"          # package + pytest + SomeDL (default backend; also needs ffmpeg)
 python -m playwright install chromium   # browser for the login (Chrome/Edge also work)
 python -m pytest                        # all tests; browser tests skip if no browser is installed
 python -m pytest tests/test_browser_auth.py   # real headless Chromium against a fake Spotify
@@ -27,33 +27,35 @@ python -m pytest tests/test_browser_auth.py   # real headless Chromium against a
 Working CLI:
 
 ```bash
-spotarchive                  # login (if the saved one doesn't work) -> fetch with selection
+spotarchive                  # login (if the saved one doesn't work) -> fetch with selection -> download
 spotarchive -l | --login     # interactive browser login helper
 spotarchive -f | --fetch     # choose playlists and rebuild setlist.csv files; -fn / --fetch --noselect reuses previous selection
+spotarchive -d | --download  # download missing songs of the selected, fetched setlists via the backend (-fd, -fnd combine)
 spotarchive -V | --version
 spotarchive -h | --help
 ```
 
-Still planned (see `.tmp/spec.md`): `-d | --download` (download via the backend), `-m | --meta` (metadata cleanup, combinable as `-dm`), `-u | --update` (compare against GitHub and update in place). Plain `spotarchive` will then also check for updates first (prompting before installing) and download + fix metadata after fetching. A single-command install script will set up dependencies and the project.
+Still planned (see `.tmp/spec.md`): `-m | --meta` (metadata cleanup, combinable as `-dm`), `-u | --update` (compare against GitHub and update in place). Plain `spotarchive` will then also check for updates first (prompting before installing) and fix metadata after downloading. A single-command install script will set up dependencies and the project.
 
 ## Architecture
 
-Package in `src/spotarchive/` (setuptools, `pyproject.toml`; console script `spotarchive = spotarchive.cli:main`). Dependencies: `playwright` (browser login), `requests`, `rich` (colors, progress bars), `questionary` (checkboxes).
+Package in `src/spotarchive/` (setuptools, `pyproject.toml`; console script `spotarchive = spotarchive.cli:main`). Dependencies: `playwright` (browser login), `requests`, `rich` (colors, progress bars), `questionary` (checkboxes); optional extra `somedl` (default backend, run as a separate program).
 
-- **`cli.py`** — argparse flags and orchestration (`run_login`, `ensure_login`, `run_fetch`); maps errors to exit codes (1 error, 130 cancelled). `main(argv, data_dir)` takes the data folder so tests can point it at a temp dir.
+- **`cli.py`** — argparse flags and orchestration (`run_login`, `ensure_login`, `run_fetch`, `run_download`); maps errors to exit codes (1 error, 130 cancelled). `main(argv, data_dir)` takes the data folder so tests can point it at a temp dir; `make_client`/`make_backend` are the seams tests replace with fakes.
 - **`spotify/auth.py`** — browser login. `interactive_login` starts installed Chrome, then Edge, then Playwright's bundled Chromium as a **plain process** (not Playwright-driven: automated browsers get endless captchas on Spotify's login) on its own profile in `data/browser-profile/`, with `--remote-debugging-port=0` (port read from `DevToolsActivePort`). While the user logs in it only polls the DevTools HTTP `/json/list` for tab URLs; once a tab reaches `open.spotify.com` it connects over CDP, reads the `sp_dc` cookie and user agent, and closes the window with `Browser.close`, then gets the first token through `refresh_session`. It keeps only spotify.com cookies and the user agent. A DevTools port turns `navigator.webdriver` on, so the login window gets `--disable-blink-features=AutomationControlled`; headless launches also drop `--enable-automation`. `refresh_session` replays the cookies in headless Chromium to get a fresh token, so Spotify's token-endpoint signing (TOTP) is never reimplemented; from the same page load it reads the persisted-query hashes out of the main `web-player.*.js` script. `SessionTokenProvider` caches the token (and hashes) and refreshes it when it expires. (The spec mentions `x-bc`; that's not a Spotify header and isn't used.)
 - **`spotify/client.py`** — read-only client for the web player's GraphQL API (`POST api-partner.spotify.com/pathfinder/v2/query`, persisted queries `profileAttributes`, `libraryV3` flattened with the `Playlists` filter, `fetchPlaylist`, `fetchLibraryTracks` for Liked Songs). The public Web API (`api.spotify.com`) is **not** used: it answers web-player tokens with 429. Only the bearer token is needed (no `client-token`). Offset pagination against `totalCount`, one forced token refresh on 401, one hash re-read (via token refresh) on 412 then `QueryOutdated`, `Retry-After` backoff on 429/5xx, `RateLimited` without waiting when Spotify asks for more than a minute. `DEFAULT_QUERY_HASHES` is the fallback when no hashes were captured.
 - **`spotify/models.py`** — `Playlist`/`Track` parsed from pathfinder JSON. No ISRC in that API (the column stays, empty); Liked Songs have no album date. Liked Songs uses the pseudo ID `liked-songs` (`spotify:collection:tracks`).
 - **`session.py`** — `data/session.json`: login (cookies, user agent, token + expiry, display name, query hashes) and per-playlist state (`selected`, `folder`). Written atomically, mode 600 on POSIX.
 - **`setlist.py`** — folder naming (Windows-safe, case-insensitive dedup by appending the playlist ID, previous owner keeps its folder, renamed playlists move their folder) and `setlist.csv` I/O. Columns: `name, artist, album, release_date, date_added, duration_ms, isrc, spotify_url`; artists joined with `; `.
 - **`fetch.py`** — records the selection and writes setlists; one failing playlist doesn't stop the others.
+- **`backends/`** — the download-backend interface. `base.py`: `DownloadBackend` (class attrs `name`, `shows_own_output`, `audio_extensions`; `check()` raises `BackendUnavailable`, `download(song, folder) -> list[Path]` raises `DownloadFailed`) and `Song` (a parsed setlist row; `key` = Spotify URL, else name/artists/album). `__init__.py`: `BACKENDS` registry + `get_backend(name, **options)`. Keep all helper-specific code in its own module; nothing outside `backends/` may know about SomeDL.
+- **`backends/somedl.py`** — runs `somedl --here --skip-file-check [--format F] -- "First Artist - Title"` once per song with `cwd` = playlist folder and inherited stdio (its output is the progress display). `--here` forces flat `{artist} - {song}` names regardless of the user's SomeDL config. SomeDL exits 0 even on failure, so success = a new/modified audio file (mtime diff of the folder). Queries equal to SomeDL subcommands (`import`, `web`, ...) are refused. Executable looked up next to `sys.executable`, then on PATH; `check()` also requires `ffmpeg`.
+- **`download.py`** — smart downloading. Per playlist folder, `.downloads.json` maps song key -> files (helpers name files after what *they* found, so names can't be matched reliably). A song is present if a recorded file exists or an audio file's stem matches `Artist - Song` (normalized; first/all artists); name matches are written back to the record. Pending songs go to the backend one at a time; the record is saved after each song; failures are collected, not recorded, and don't stop the rest. Downloading only reads `session.json` + setlists, never Spotify.
 - **`ui.py`** — rich console output (ASCII markers so legacy Windows consoles work), questionary checkbox, progress bars.
 
 Planned:
-- **Download backend** — an interface that the rest of the code talks to; SomeDL (CLI) is the default implementation. Keep all SomeDL-specific code behind that interface so contributors can swap in another helper. Smart downloading: before requesting downloads, skip songs already present in the folder.
 - **Metadata correction** — use the helper's own metadata when it supports it (e.g. `somedl import`), otherwise fall back to `setlist.csv`.
-- **Configuration** — a config file in the project root: download folder, which backend to use, and per-backend settings (output format, metadata source of truth, folder structure, ...).
-- **UI** — when SomeDL is the backend its own output can serve as the download progress display.
+- **Configuration** — a config file in the project root: download folder, which backend to use, and per-backend settings (output format, metadata source of truth, folder structure, ...). Backend settings should reach backends as `get_backend(name, **options)` keyword args (SomeDL already takes `executable`, `audio_format`, `extra_args`).
 
 Everything must work on both Linux and Windows: use `pathlib`, avoid shell-specific assumptions, and don't hardcode path separators.
 

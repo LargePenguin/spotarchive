@@ -1,7 +1,7 @@
 # Quickstart
 
 > [!WARNING]
-> Spotarchive is still being built. Steps 1–3 work today; downloading (step 4), the all-in-one run's download/metadata/update steps and the install script are planned.
+> Spotarchive is still being built. Steps 1–4 work today; metadata cleanup (`--meta`), the all-in-one run's update and metadata steps and the install script are planned.
 
 ## Legal note
 
@@ -12,7 +12,7 @@ Spotarchive never acquires music from Spotify. The only data taken from Spotify 
 - Python 3.10 or newer
 - Linux or Windows
 - A web browser for the login step
-- [SomeDL](https://github.com/ChemistryGull/SomeDL) (the default download backend; installed by the setup script)
+- [SomeDL](https://github.com/ChemistryGull/SomeDL) (the default download backend) and [FFmpeg](https://ffmpeg.org/)
 
 ## 1. Install
 
@@ -27,11 +27,11 @@ python -m venv .venv
 Activate the virtualenv (`source .venv/bin/activate` on Linux, `.venv\Scripts\activate` on Windows), then:
 
 ```bash
-pip install -e .
+pip install -e ".[somedl]"
 python -m playwright install chromium
 ```
 
-The last command downloads the browser used for logging in. You can skip it if Google Chrome or Microsoft Edge is installed; see [which browser is used](authentication.md#which-browser-is-used).
+The first command installs Spotarchive together with SomeDL, the default [download backend](backends.md). SomeDL also needs [FFmpeg](https://ffmpeg.org/) on your `PATH`; see [installing SomeDL](backends.md#installing-it). The last command downloads the browser used for logging in. You can skip it if Google Chrome or Microsoft Edge is installed; see [which browser is used](authentication.md#which-browser-is-used).
 
 ## 2. Log in
 
@@ -55,7 +55,9 @@ Choose which playlists to cache. Each gets a folder under the download folder (d
 spotarchive --download
 ```
 
-Songs already present in a playlist folder are skipped. Add `--meta` (`-dm` together) to clean up metadata afterwards.
+SomeDL finds each song of your setlists on YouTube Music and saves it into the playlist's folder. Songs already present are skipped, so running it again only downloads what's new or failed before. `spotarchive -fnd` refreshes your setlists and downloads in one go. Details: [Downloading](downloading.md).
+
+Cleaning up metadata afterwards with `--meta` (`-dm` together) is planned.
 
 ## 5. Everything at once
 
@@ -63,7 +65,7 @@ Songs already present in a playlist folder are skipped. Add `--meta` (`-dm` toge
 spotarchive
 ```
 
-Checks for updates, logs in if needed, then fetches, downloads and fixes metadata.
+Logs in if needed, then fetches (asking which playlists) and downloads. Checking for updates first and fixing metadata at the end are planned.
 
 ## Next steps
 

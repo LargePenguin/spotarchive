@@ -34,6 +34,8 @@ data/
     └── setlist.csv
 ```
 
+[Downloading](downloading.md) later puts the songs into the same folders.
+
 Folder names are the playlist names, adjusted to be valid on both Linux and Windows:
 
 - `< > : " / \ | ? *` and control characters become `_`, and repeated whitespace collapses to one space.
