@@ -1,11 +1,17 @@
 """Browser-based Spotify login.
 
-Spotarchive never asks for your password. It opens a real browser at
-Spotify's login page and, once you've signed in, keeps:
+Spotarchive never asks for your password. It opens a normal browser window
+at Spotify's login page, with a profile of its own, and once you've signed in
+and closed the window it reads from that profile:
 
 * the spotify.com cookies (``sp_dc`` is the long-lived login cookie),
 * the browser's user agent, and
 * the short-lived access token the Spotify web player fetches for itself.
+
+The login window is started as a plain process, not driven by Playwright: an
+automated browser (``navigator.webdriver``, a throwaway profile, a DevTools
+connection) gets stuck in endless captchas on Spotify's login page.
+Playwright only opens the profile afterwards, headlessly, to read the result.
 
 When the token expires, the cookies are replayed in a headless browser so
 the web player hands out a fresh one. Letting the real web player mint the
@@ -14,8 +20,12 @@ token avoids re-implementing Spotify's token endpoint, which changes often.
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Protocol
 from urllib.parse import urlparse
 
@@ -28,17 +38,23 @@ TOKEN_PATHS = ("/api/token", "/get_access_token")
 
 LOGIN_TIMEOUT_S = 600
 REFRESH_TIMEOUT_S = 60
-# After the login cookie appears, how long to wait for the web player to
-# fetch a token on its own before navigating to it ourselves.
-REDIRECT_GRACE_S = 10
-# How long an anonymous token may stand alone during a refresh before the
-# saved login is considered expired.
+# How long an anonymous token may stand alone before the cookies are
+# considered logged out.
 ANONYMOUS_GRACE_S = 5
 POLL_MS = 500
 
-# Browsers to try, in order: Playwright's bundled Chromium, then installed
-# Chrome and Edge (always present on Windows).
+# Browsers to try for headless token refreshes, in order: Playwright's
+# bundled Chromium, then installed Chrome and Edge (always present on Windows).
 BROWSER_CHANNELS = (None, "chrome", "msedge")
+# Keep navigator.webdriver false in the headless browsers too.
+STEALTH_ARGS = ["--disable-blink-features=AutomationControlled"]
+STEALTH_IGNORED_DEFAULTS = ["--enable-automation"]
+
+# Installed browsers preferred for the login window, before Playwright's
+# bundled Chromium.
+LINUX_BROWSERS = ("google-chrome", "google-chrome-stable", "microsoft-edge", "microsoft-edge-stable")
+WINDOWS_BROWSERS = ("Google/Chrome/Application/chrome.exe", "Microsoft/Edge/Application/msedge.exe")
+WINDOWS_ROOTS = ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")
 
 
 class AuthError(Exception):
@@ -108,7 +124,12 @@ def _launch(playwright, headless: bool):
     errors = []
     for channel in BROWSER_CHANNELS:
         try:
-            return playwright.chromium.launch(headless=headless, channel=channel)
+            return playwright.chromium.launch(
+                headless=headless,
+                channel=channel,
+                args=STEALTH_ARGS,
+                ignore_default_args=STEALTH_IGNORED_DEFAULTS,
+            )
         except PlaywrightError as exc:
             errors.append(f"{channel or 'bundled chromium'}: {str(exc).splitlines()[0]}")
     raise BrowserUnavailable(
@@ -145,66 +166,160 @@ class _TokenWatcher:
         return found
 
 
+def _web_player_token(context, timeout_s: int) -> TokenInfo | None:
+    """Load the web player and return the logged-in token it fetches.
+
+    Returns None when only a logged-out (anonymous) token shows up, i.e. the
+    context's cookies hold no valid login.
+    """
+    watcher = _TokenWatcher(context)
+    page = context.pages[0] if context.pages else context.new_page()
+    page.goto(WEB_PLAYER_URL, wait_until="domcontentloaded")
+
+    deadline = time.monotonic() + timeout_s
+    anonymous_since = None
+    while time.monotonic() < deadline:
+        info = watcher.poll()
+        if info and info.anonymous:
+            anonymous_since = anonymous_since or time.monotonic()
+        elif info:
+            return info
+        if anonymous_since and time.monotonic() - anonymous_since > ANONYMOUS_GRACE_S:
+            return None
+        page.wait_for_timeout(POLL_MS)
+    raise AuthError("Timed out waiting for Spotify to issue a token.")
+
+
+def installed_browsers() -> list[Path]:
+    """Chrome and Edge executables installed on this computer."""
+    if os.name == "nt":
+        roots = [os.environ.get(var) for var in WINDOWS_ROOTS]
+        found = [Path(root) / rel for rel in WINDOWS_BROWSERS for root in roots if root]
+    else:
+        found = [Path(path) for name in LINUX_BROWSERS if (path := shutil.which(name))]
+    return [path for path in found if path.is_file()]
+
+
+def _login_browser(playwright) -> Path:
+    candidates = installed_browsers()
+    bundled = Path(playwright.chromium.executable_path)
+    if bundled.is_file():
+        candidates.append(bundled)
+    if not candidates:
+        raise BrowserUnavailable(
+            "Couldn't find a browser. Install Google Chrome or Microsoft Edge, "
+            "or Playwright's Chromium with `python -m playwright install chromium`."
+        )
+    return candidates[0]
+
+
+def login_browser_command(executable: Path, profile_dir: Path, url: str) -> list[str]:
+    """A plain (not automated) browser window on its own profile."""
+    return [
+        str(executable),
+        f"--user-data-dir={profile_dir}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        # Encrypt cookies the way Playwright reads them back (Linux/macOS).
+        "--password-store=basic",
+        "--use-mock-keychain",
+        "--new-window",
+        url,
+    ]
+
+
+def open_login_browser(executable: Path, profile_dir: Path, url: str, timeout_s: int) -> None:
+    """Open the login window and wait until the user closes it."""
+    try:
+        process = subprocess.Popen(
+            login_browser_command(executable, profile_dir, url),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        raise BrowserUnavailable(f"Couldn't start {executable}: {exc}") from exc
+    try:
+        process.wait(timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        raise LoginCancelled(f"The browser was still open after {timeout_s // 60} minutes.") from None
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+
+
+def _prepare_profile(profile_dir: Path) -> None:
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    if os.name == "posix":
+        # The profile holds the login cookies.
+        os.chmod(profile_dir, 0o700)
+
+
 def interactive_login(
+    profile_dir: Path,
     timeout_s: int = LOGIN_TIMEOUT_S,
     on_status: Callable[[str], None] = lambda msg: None,
-    headless: bool = False,
+    open_browser: Callable[[Path, Path, str, int], None] = open_login_browser,
     configure_context: Callable[[object], None] | None = None,
 ) -> SpotifySession:
-    """Open a visible browser at Spotify's login page and capture the session.
+    """Let the user log in in a normal browser window, then capture the session.
 
-    *headless* and *configure_context* (called with the new browser context,
-    e.g. to route requests to fakes) exist for tests.
+    The window uses *profile_dir* as its profile, which is kept so Spotify
+    recognises the device on later logins. *open_browser* (which returns once
+    the window is closed) and *configure_context* (called with the headless
+    context that reads the profile, e.g. to route requests to fakes) exist
+    for tests.
     """
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import sync_playwright
 
+    profile_dir = Path(profile_dir).resolve()
+    _prepare_profile(profile_dir)
     with sync_playwright() as p:
-        browser = _launch(p, headless=headless)
+        executable = _login_browser(p)
+        on_status(
+            "Log in to Spotify in the browser window that just opened, "
+            "then close the window to continue."
+        )
+        open_browser(executable, profile_dir, LOGIN_URL, timeout_s)
+
+        on_status("Reading the login from the browser profile...")
         try:
-            context = browser.new_context()
+            context = p.chromium.launch_persistent_context(
+                str(profile_dir),
+                executable_path=str(executable),
+                headless=True,
+                args=STEALTH_ARGS,
+                ignore_default_args=STEALTH_IGNORED_DEFAULTS,
+            )
+        except PlaywrightError as exc:
+            raise AuthError(
+                "Couldn't open the login browser profile; make sure the login "
+                f"window is closed: {str(exc).splitlines()[0]}"
+            ) from exc
+        try:
             if configure_context:
                 configure_context(context)
-            watcher = _TokenWatcher(context)
-            page = context.new_page()
-            page.goto(LOGIN_URL)
-            on_status("Log in to Spotify in the browser window that just opened.")
-
-            deadline = time.monotonic() + timeout_s
-            cookie_seen_at = None
-            redirected = False
-            while time.monotonic() < deadline:
-                info = watcher.poll()
-                cookies = spotify_cookies(context.cookies())
-                if info and not info.anonymous and has_login_cookie(cookies):
-                    user_agent = page.evaluate("navigator.userAgent")
-                    return SpotifySession(
-                        cookies=cookies,
-                        user_agent=normalize_user_agent(user_agent),
-                        access_token=info.access_token,
-                        expires_at_ms=info.expires_at_ms,
-                    )
-                if has_login_cookie(cookies):
-                    cookie_seen_at = cookie_seen_at or time.monotonic()
-                    if not redirected and time.monotonic() - cookie_seen_at > REDIRECT_GRACE_S:
-                        # Logged in, but the login flow didn't end in the web
-                        # player; open it so it fetches a token.
-                        page.goto(WEB_PLAYER_URL)
-                        redirected = True
-                if not context.pages:
-                    raise LoginCancelled("The browser was closed before the login finished.")
-                page = context.pages[-1]
-                try:
-                    page.wait_for_timeout(POLL_MS)
-                except PlaywrightError:
-                    if not context.pages:
-                        raise LoginCancelled("The browser was closed before the login finished.")
-            raise LoginCancelled(f"No login within {timeout_s // 60} minutes.")
+            if not has_login_cookie(spotify_cookies(context.cookies())):
+                raise LoginCancelled("The browser was closed before the login finished.")
+            info = _web_player_token(context, REFRESH_TIMEOUT_S)
+            if info is None:
+                raise LoginCancelled("The browser was closed before the login finished.")
+            user_agent = context.pages[0].evaluate("navigator.userAgent")
+            return SpotifySession(
+                cookies=spotify_cookies(context.cookies()),
+                user_agent=normalize_user_agent(user_agent),
+                access_token=info.access_token,
+                expires_at_ms=info.expires_at_ms,
+            )
         except PlaywrightError as exc:
-            raise LoginCancelled(f"The browser stopped unexpectedly: {str(exc).splitlines()[0]}") from exc
+            raise AuthError(f"Reading the login failed: {str(exc).splitlines()[0]}") from exc
         finally:
             try:
-                browser.close()
+                context.close()
             except PlaywrightError:
                 pass
 
@@ -230,32 +345,20 @@ def refresh_session(
             context.add_cookies(session.cookies)
             if configure_context:
                 configure_context(context)
-            watcher = _TokenWatcher(context)
-            page = context.new_page()
-            page.goto(WEB_PLAYER_URL, wait_until="domcontentloaded")
-
-            deadline = time.monotonic() + timeout_s
-            anonymous_since = None
-            while time.monotonic() < deadline:
-                info = watcher.poll()
-                if info and info.anonymous:
-                    anonymous_since = anonymous_since or time.monotonic()
-                elif info:
-                    cookies = spotify_cookies(context.cookies())
-                    return SpotifySession(
-                        # Spotify may rotate cookies; keep the newest ones.
-                        cookies=cookies if has_login_cookie(cookies) else session.cookies,
-                        user_agent=session.user_agent,
-                        access_token=info.access_token,
-                        expires_at_ms=info.expires_at_ms,
-                        user_id=session.user_id,
-                        display_name=session.display_name,
-                    )
-                if anonymous_since and time.monotonic() - anonymous_since > ANONYMOUS_GRACE_S:
-                    # Only a logged-out token showed up: the cookies are dead.
-                    raise LoginRequired("The saved Spotify login has expired.")
-                page.wait_for_timeout(POLL_MS)
-            raise AuthError("Timed out waiting for Spotify to issue a token.")
+            info = _web_player_token(context, timeout_s)
+            if info is None:
+                # Only a logged-out token showed up: the cookies are dead.
+                raise LoginRequired("The saved Spotify login has expired.")
+            cookies = spotify_cookies(context.cookies())
+            return SpotifySession(
+                # Spotify may rotate cookies; keep the newest ones.
+                cookies=cookies if has_login_cookie(cookies) else session.cookies,
+                user_agent=session.user_agent,
+                access_token=info.access_token,
+                expires_at_ms=info.expires_at_ms,
+                user_id=session.user_id,
+                display_name=session.display_name,
+            )
         except PlaywrightError as exc:
             raise AuthError(f"Token refresh failed: {str(exc).splitlines()[0]}") from exc
         finally:

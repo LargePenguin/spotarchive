@@ -138,7 +138,7 @@ def test_fetch_without_login_asks_to_log_in(tmp_path, capsys):
 
 
 def fake_login(monkeypatch, calls):
-    def login(on_status=None):
+    def login(profile_dir, on_status=None):
         calls.append(1)
         return SpotifySession(cookies=[], user_agent="dummy-agent", access_token="dummy-token")
 
@@ -174,7 +174,7 @@ def test_default_run_relogs_in_when_login_expired(logged_in, fake_client, monkey
     fake_client._user_ok = False
     choose(monkeypatch, [])
 
-    def login(on_status=None):
+    def login(profile_dir, on_status=None):
         calls.append(1)
         fake_client._user_ok = True
         return SpotifySession(cookies=[], user_agent="dummy-agent", access_token="dummy-token")

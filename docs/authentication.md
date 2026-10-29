@@ -9,25 +9,25 @@ spotarchive --login
 ```
 
 1. A browser window opens at Spotify's login page.
-2. Log in as usual (email, phone, Google, Facebook, Apple or a one-time code all work).
-3. Once Spotify's web player loads, Spotarchive captures the session and closes the window.
+2. Log in as usual (email, phone, Google, Facebook, Apple or a one-time code all work), solving a captcha if Spotify asks for one.
+3. Close the browser window.
+4. Spotarchive reads the login from the window's profile in the background and saves it.
 
-The login helper waits up to 10 minutes. Closing the window cancels it.
+The login helper waits up to 10 minutes for the window to be closed. Closing it without logging in cancels the login.
 
 Running plain `spotarchive` checks the saved login first and only opens the browser when there is no working login.
 
-> [!TIP]
-> If the browser lands somewhere other than the web player after logging in, just wait: Spotarchive opens `open.spotify.com` itself about 10 seconds after it sees you're logged in.
+The login window is an ordinary browser window with a profile of its own (it doesn't touch your normal browser profile or its logins). Spotarchive doesn't control it while you log in: automated browsers get stuck in endless captchas on Spotify's login page. The profile is kept, so Spotify recognizes the device the next time you log in.
 
 ## Which browser is used
 
-Spotarchive drives the browser through [Playwright](https://playwright.dev/python/) and tries, in order:
+For the login window, Spotarchive uses the first of these it finds:
 
-1. Playwright's bundled Chromium (`python -m playwright install chromium`)
-2. Google Chrome
-3. Microsoft Edge (preinstalled on Windows)
+1. Google Chrome
+2. Microsoft Edge (preinstalled on Windows)
+3. Playwright's bundled Chromium (`python -m playwright install chromium`)
 
-If none of them can be started, the error message lists why each one failed.
+Reading the login afterwards and [refreshing tokens](#how-tokens-are-refreshed) happen in a hidden (headless) browser started through [Playwright](https://playwright.dev/python/). Token refreshes try Playwright's bundled Chromium, then Chrome, then Edge; if none of them can be started, the error message lists why each one failed.
 
 ## What is stored
 
@@ -42,8 +42,10 @@ The login is saved in `session.json` at the root of the download folder (default
 
 On Linux the file is created readable only by your user (mode `600`).
 
+The login window's browser profile is kept next to it, in `browser-profile/` (default `data/browser-profile/`, readable only by your user on Linux). It holds that window's cookies, including the Spotify login.
+
 > [!WARNING]
-> `session.json` grants access to your Spotify account. Never share it or commit it; the repository's `.gitignore` already excludes it and the whole `data/` folder. To log out, delete the file.
+> `session.json` and `browser-profile/` grant access to your Spotify account. Never share or commit them; the repository's `.gitignore` already excludes the whole `data/` folder. To log out, delete both.
 
 ## How tokens are refreshed
 
@@ -56,6 +58,8 @@ If the cookies themselves have expired (Spotify only issues a logged-out token),
 ## Troubleshooting
 
 - **"Couldn't start a browser"**: run `python -m playwright install chromium` (on Linux, `python -m playwright install --with-deps chromium` also installs the system libraries Chromium needs), or install Chrome or Edge.
+- **Captchas keep coming back, or "Something went wrong"** on the login page: wait a few minutes before trying again, and if it persists install Google Chrome, which Spotarchive prefers over Playwright's Chromium. Spotarchive never drives the login window, so this is Spotify being cautious about the network or a brand-new profile, not about automation.
+- **"The browser was closed before the login finished"**: the window was closed before Spotify logged you in; run `spotarchive --login` again. If a browser window from a previous attempt is still open, close it first.
 - **"The saved Spotify login has expired"**: run `spotarchive --login`.
 - **"Can't read the session file"**: the file is damaged; delete `data/session.json` and log in again. Your playlist selection will need to be made again too.
 

@@ -1,11 +1,17 @@
+from pathlib import Path
+
 import pytest
 
 from spotarchive.session import SessionStore, SpotifySession
+from spotarchive.spotify import auth
 from spotarchive.spotify.auth import (
+    LOGIN_URL,
     LoginRequired,
     SessionTokenProvider,
     has_login_cookie,
+    installed_browsers,
     is_token_url,
+    login_browser_command,
     normalize_user_agent,
     parse_token_response,
     spotify_cookies,
@@ -91,3 +97,20 @@ def test_provider_force_refresh(tmp_path):
 def test_provider_without_login(tmp_path):
     with pytest.raises(LoginRequired):
         SessionTokenProvider(SessionStore.load(tmp_path)).get_token()
+
+
+def test_login_browser_is_not_automated(tmp_path):
+    cmd = login_browser_command(Path("/fake/chrome"), tmp_path / "profile", LOGIN_URL)
+    assert cmd[0] == str(Path("/fake/chrome"))
+    assert f"--user-data-dir={tmp_path / 'profile'}" in cmd
+    assert cmd[-1] == LOGIN_URL
+    # Flags that make Spotify's captcha treat the window as a bot.
+    assert not any(arg.startswith(("--enable-automation", "--remote-debugging", "--headless")) for arg in cmd)
+
+
+def test_installed_browsers_on_linux(tmp_path, monkeypatch):
+    chrome = tmp_path / "google-chrome"
+    chrome.write_text("")
+    monkeypatch.setattr(auth.os, "name", "posix")
+    monkeypatch.setattr(auth.shutil, "which", lambda name: str(chrome) if name == "google-chrome" else None)
+    assert installed_browsers() == [chrome]

@@ -19,6 +19,10 @@ from spotarchive.spotify.auth import (
 from spotarchive.spotify.client import SpotifyApiError, SpotifyClient
 
 
+# Profile of the login browser window, next to session.json.
+BROWSER_PROFILE_DIRNAME = "browser-profile"
+
+
 class CliError(Exception):
     """A user-facing error that ends the run."""
 
@@ -50,7 +54,7 @@ def make_client(store: SessionStore) -> SpotifyClient:
 
 def run_login(store: SessionStore) -> None:
     ui.info("Opening a browser for the Spotify login...")
-    store.spotify = interactive_login(on_status=ui.info)
+    store.spotify = interactive_login(store.path.parent / BROWSER_PROFILE_DIRNAME, on_status=ui.info)
     user = make_client(store).current_user()
     store.spotify.user_id = user.get("id")
     store.spotify.display_name = user.get("display_name") or user.get("id")
