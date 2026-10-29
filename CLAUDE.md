@@ -9,34 +9,51 @@ Spotarchive is a cross-platform (Linux and Windows) Python CLI that caches metad
 
 ## Status
 
-The repo is at the start of the development plan: only `LICENSE`, `README.md`, `.gitignore`, `CLAUDE.md` and the `docs/` stubs (`docs/README.md`, `docs/quickstart.md`) exist; no code yet. Update this file (especially **Commands** and **Architecture**) as code lands — don't leave it describing things that don't exist, and don't invent commands before they work.
+Steps 1–3 of the development plan are done: docs scaffolding and the Spotify features (browser login, playlist selection, `setlist.csv` caching). Downloading, metadata cleanup, updates, the config file and the install script don't exist yet. Update this file (especially **Commands** and **Architecture**) as code lands — don't leave it describing things that don't exist, and don't invent commands before they work.
 
 Development plan order: (1) `CLAUDE.md`, (2) `docs/`, minimal `README.md` (ASCII-art name + status badges) and quickstart, (3) Spotify features, (4) download-backend features, (5) metadata cleanup, setup script and config file.
 
 ## Commands
 
-To be filled in as they are created. Planned interface (see `.tmp/spec.md` for details):
+Setup (until the install script exists), from the repo root with the virtualenv active:
 
 ```bash
-spotarchive                  # full flow: update check -> login (if needed) -> fetch -> download -> meta
+pip install -e ".[dev]"                 # package + pytest
+python -m playwright install chromium   # browser for the login (Chrome/Edge also work)
+python -m pytest                        # all tests; browser tests skip if no browser is installed
+python -m pytest tests/test_browser_auth.py   # real headless Chromium against a fake Spotify
+```
+
+Working CLI:
+
+```bash
+spotarchive                  # login (if the saved one doesn't work) -> fetch with selection
 spotarchive -l | --login     # interactive browser login helper
 spotarchive -f | --fetch     # choose playlists and rebuild setlist.csv files; -fn / --fetch --noselect reuses previous selection
-spotarchive -d | --download  # download songs listed in the setlists via the backend
-spotarchive -m | --meta      # metadata cleanup (combinable: -dm)
-spotarchive -u | --update    # compare against the GitHub version and update in place
+spotarchive -V | --version
 spotarchive -h | --help
 ```
 
-Plain `spotarchive` checks for updates first (prompting before installing) and runs the login helper first if there is no working login. A single-command install script will set up dependencies and the project.
+Still planned (see `.tmp/spec.md`): `-d | --download` (download via the backend), `-m | --meta` (metadata cleanup, combinable as `-dm`), `-u | --update` (compare against GitHub and update in place). Plain `spotarchive` will then also check for updates first (prompting before installing) and download + fix metadata after fetching. A single-command install script will set up dependencies and the project.
 
-## Architecture (planned)
+## Architecture
 
-- **Spotify layer** — browser-based auth (launch a browser at Spotify's login, capture the session via cookie, user agent and `x-bc`) and playlist/track metadata fetching. Session info and playlist include/exclude choices are cached in a file at the root of the data folder.
-- **Setlist** — each selected playlist gets a subfolder in the configurable download folder (default `data/` under the current working directory, e.g. `data/MyPlaylistName/`) containing `setlist.csv` (name, artist, album, release date, date added).
+Package in `src/spotarchive/` (setuptools, `pyproject.toml`; console script `spotarchive = spotarchive.cli:main`). Dependencies: `playwright` (browser login), `requests`, `rich` (colors, progress bars), `questionary` (checkboxes).
+
+- **`cli.py`** — argparse flags and orchestration (`run_login`, `ensure_login`, `run_fetch`); maps errors to exit codes (1 error, 130 cancelled). `main(argv, data_dir)` takes the data folder so tests can point it at a temp dir.
+- **`spotify/auth.py`** — browser login via Playwright (bundled Chromium, then installed Chrome, then Edge). `interactive_login` opens Spotify's login page and waits for the `sp_dc` cookie plus a non-anonymous token from the web player's own `open.spotify.com/api/token` request; it keeps only spotify.com cookies and the user agent. `refresh_session` replays the cookies in headless Chromium to get a fresh token, so Spotify's token-endpoint signing (TOTP) is never reimplemented. `SessionTokenProvider` caches the token and refreshes it when it expires. (The spec mentions `x-bc`; that's not a Spotify header and isn't used.)
+- **`spotify/client.py`** — read-only Web API client (`/me`, `/me/playlists`, `/me/tracks` for Liked Songs, `/playlists/{id}/items` with fallback to the pre-2026 `/tracks`): pagination, one forced token refresh on 401, `Retry-After` backoff on 429/5xx.
+- **`spotify/models.py`** — `Playlist`/`Track` parsed from API JSON; accepts both the pre- and post-February-2026 field names (`tracks`/`items`, `track`/`item`). Liked Songs uses the pseudo ID `liked-songs`.
+- **`session.py`** — `data/session.json`: login (cookies, user agent, token + expiry, display name) and per-playlist state (`selected`, `folder`). Written atomically, mode 600 on POSIX.
+- **`setlist.py`** — folder naming (Windows-safe, case-insensitive dedup by appending the playlist ID, previous owner keeps its folder, renamed playlists move their folder) and `setlist.csv` I/O. Columns: `name, artist, album, release_date, date_added, duration_ms, isrc, spotify_url`; artists joined with `; `.
+- **`fetch.py`** — records the selection and writes setlists; one failing playlist doesn't stop the others.
+- **`ui.py`** — rich console output (ASCII markers so legacy Windows consoles work), questionary checkbox, progress bars.
+
+Planned:
 - **Download backend** — an interface that the rest of the code talks to; SomeDL (CLI) is the default implementation. Keep all SomeDL-specific code behind that interface so contributors can swap in another helper. Smart downloading: before requesting downloads, skip songs already present in the folder.
 - **Metadata correction** — use the helper's own metadata when it supports it (e.g. `somedl import`), otherwise fall back to `setlist.csv`.
 - **Configuration** — a config file in the project root: download folder, which backend to use, and per-backend settings (output format, metadata source of truth, folder structure, ...).
-- **UI** — colored CLI output, checkbox selection for playlists, progress bars. When SomeDL is the backend its own output can serve as the download progress display.
+- **UI** — when SomeDL is the backend its own output can serve as the download progress display.
 
 Everything must work on both Linux and Windows: use `pathlib`, avoid shell-specific assumptions, and don't hardcode path separators.
 
@@ -49,7 +66,7 @@ Everything must work on both Linux and Windows: use `pathlib`, avoid shell-speci
 
 ## Tests
 
-None yet. When tests are added, they must never hit Spotify or download real audio — fake the Spotify layer and the download backend. Document the test commands under **Commands**.
+pytest, in `tests/` (commands under **Commands**). Tests must never hit Spotify or download real audio — fake the Spotify layer and the download backend. `tests/conftest.py` has `FakeHttp` (queued responses per API path) and `FakeTokens`; `tests/test_cli.py` swaps `cli.make_client`, `cli.interactive_login` and `ui.choose_playlists`. `tests/test_browser_auth.py` drives real headless Chromium but routes every request to fake Spotify pages (and aborts anything else) through the `configure_context` hook of `interactive_login`/`refresh_session`. Use only obviously fake data (`dummy-token`, `Fake Artist`).
 
 ## Conventions
 

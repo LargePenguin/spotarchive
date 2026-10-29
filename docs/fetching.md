@@ -1,0 +1,64 @@
+# Fetching playlists
+
+Fetching reads the contents of your Spotify playlists and writes them to a `setlist.csv` per playlist. Only metadata is read from Spotify; no audio is ever taken from it.
+
+```bash
+spotarchive --fetch        # choose playlists, then rebuild their setlists
+spotarchive -fn            # same, reusing the previous choice (--fetch --noselect)
+```
+
+You need a working [login](authentication.md) first.
+
+## Choosing playlists
+
+`spotarchive --fetch` lists your Liked Songs plus every playlist you own or follow, with a checkbox each:
+
+- <kbd>Space</kbd> toggles a playlist, <kbd>A</kbd> toggles all of them, <kbd>Enter</kbd> confirms.
+- Your previous choice is pre-ticked.
+- <kbd>Ctrl</kbd>+<kbd>C</kbd> cancels without changing anything.
+
+The choice is saved in `session.json` in the download folder, so `spotarchive -fn` can refresh the same playlists without asking. Playlists that have disappeared from your library since are reported and dropped from the choice.
+
+> [!NOTE]
+> Spotify may refuse to list the songs of playlists you follow but don't own or collaborate on. Such playlists are reported as failed; the rest are still fetched.
+
+## Folders
+
+Every selected playlist gets a folder in the download folder (default `data/` in the current directory):
+
+```text
+data/
+├── session.json
+├── Liked Songs/
+│   └── setlist.csv
+└── Road Trip/
+    └── setlist.csv
+```
+
+Folder names are the playlist names, adjusted to be valid on both Linux and Windows:
+
+- `< > : " / \ | ? *` and control characters become `_`, and repeated whitespace collapses to one space.
+- Trailing dots and spaces are removed, and names are capped at 100 characters.
+- Names Windows reserves (`CON`, `NUL`, `COM1`, ...) get a leading `_`.
+- Two playlists whose names would clash (ignoring case) are told apart by appending the playlist ID, e.g. `Chill (abc123)`. A playlist that already had the plain name keeps it.
+
+When you rename a playlist on Spotify, its folder is renamed on the next fetch, together with anything already downloaded into it.
+
+## The `setlist.csv` format
+
+A UTF-8 CSV file with a header row and one row per song, in playlist order. Each fetch rebuilds the file from scratch.
+
+| Column | Example | Notes |
+| --- | --- | --- |
+| `name` | `Example Song` | Song title |
+| `artist` | `First Artist; Second Artist` | All artists, separated by `; ` (artist names can contain commas) |
+| `album` | `Example Album` | |
+| `release_date` | `2001-02-03` | Album release date; Spotify sometimes only knows the year (`2001`) or month (`2001-02`) |
+| `date_added` | `2024-05-06T07:08:09Z` | When the song was added to the playlist (UTC) |
+| `duration_ms` | `180000` | Length in milliseconds |
+| `isrc` | `XX0000000001` | International Standard Recording Code, when Spotify has one; helps download backends find the exact recording |
+| `spotify_url` | `https://open.spotify.com/track/...` | Empty for local files |
+
+Podcast episodes and songs that are no longer available on Spotify are left out.
+
+Back to the [documentation index](README.md).
