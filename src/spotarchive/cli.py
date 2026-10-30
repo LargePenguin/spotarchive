@@ -323,8 +323,8 @@ def _install_update(latest: str) -> None:
     root = update.project_root()
     if root is None:
         raise CliError(
-            f"Spotarchive {latest} is available, but this install isn't a git clone, so it can't update "
-            f"itself. Run the install script to update: {update.REPO_URL}#quick-start"
+            f"Spotarchive {latest} is available, but this install isn't an editable checkout, so it can't "
+            f"update itself. Run the install script to update: {update.REPO_URL}#quick-start"
         )
     ui.info(f"Updating Spotarchive {__version__} -> {latest} in {root}...")
     try:
