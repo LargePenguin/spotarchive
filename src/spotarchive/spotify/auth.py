@@ -65,7 +65,8 @@ DEBUG_PORT_FILE = "DevToolsActivePort"
 # Browsers to try for headless token refreshes, in order: Playwright's
 # bundled Chromium, then installed Chrome and Edge (always present on Windows).
 BROWSER_CHANNELS = (None, "chrome", "msedge")
-# Keep navigator.webdriver false in the headless browsers and the login window.
+# Keep navigator.webdriver false in the headless browsers (not used for the
+# login window: Chrome shows a "no longer supported" banner for the flag).
 STEALTH_ARGS = ["--disable-blink-features=AutomationControlled"]
 STEALTH_IGNORED_DEFAULTS = ["--enable-automation"]
 
@@ -260,8 +261,8 @@ def login_browser_command(executable: Path, profile_dir: Path, url: str) -> list
         str(executable),
         f"--user-data-dir={profile_dir}",
         "--remote-debugging-port=0",
-        # The DevTools port alone turns navigator.webdriver on.
-        *STEALTH_ARGS,
+        # No --disable-blink-features=AutomationControlled here: current Chrome
+        # no longer supports it and shows a warning banner in the window.
         "--no-first-run",
         "--no-default-browser-check",
         # Keep the profile's cookies out of the system keyring (no prompt).
