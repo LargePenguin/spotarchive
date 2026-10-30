@@ -137,8 +137,8 @@ def test_login_browser_is_not_automated(tmp_path):
     # port alone is fine: it's only polled for tab URLs during the login.
     assert not any(arg.startswith(("--enable-automation", "--remote-debugging-pipe", "--headless")) for arg in cmd)
     assert "--remote-debugging-port=0" in cmd
-    # ...but it turns navigator.webdriver on unless this is set.
-    assert "--disable-blink-features=AutomationControlled" in cmd
+    # Chrome warns about this flag being unsupported, so the window mustn't get it.
+    assert not any(arg.startswith("--disable-blink-features") for arg in cmd)
 
 
 def test_installed_browsers_on_linux(tmp_path, monkeypatch):
