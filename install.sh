@@ -7,9 +7,9 @@
 #
 # Installs Spotarchive with all its dependencies into a virtualenv (.venv) in
 # the project folder: the Python packages, SomeDL (the default download
-# backend), the Chromium browser used for logging in and FFmpeg. Then links
-# the `spotarchive` command into ~/.local/bin. Safe to run again to repair or
-# update an install.
+# backend), the Chromium browser used for logging in and FFmpeg. Then, if you
+# agree, links the `spotarchive` command into ~/.local/bin. Safe to run again
+# to repair or update an install.
 #
 # Options (also settable through the environment variables in brackets):
 #   --dir DIR      where to clone Spotarchive when not run from a clone
@@ -17,9 +17,9 @@
 #   --bin-dir DIR  where to link the command [SPOTARCHIVE_BIN_DIR, default ~/.local/bin]
 #   --no-browser   don't install Playwright's Chromium (Chrome or Edge is used instead)
 #   --no-ffmpeg    don't install FFmpeg
-#   --no-link      don't link the command
+#   --no-link      don't link the command (and don't ask about it)
 #   --dev          also install the test dependencies
-#   -y, --yes      don't ask before installing system packages
+#   -y, --yes      don't ask before linking the command or installing system packages
 set -euo pipefail
 
 REPO_URL="https://github.com/LargePenguin/spotarchive.git"
@@ -168,7 +168,7 @@ fi
 
 # --- Command ----------------------------------------------------------------
 
-if [ "$WITH_LINK" = 1 ]; then
+if [ "$WITH_LINK" = 1 ] && confirm "Link the spotarchive command into $BIN_DIR so you can run it from anywhere?"; then
     mkdir -p "$BIN_DIR"
     ln -sf "$VENV/bin/spotarchive" "$BIN_DIR/spotarchive"
     step "Linked the spotarchive command into $BIN_DIR"
@@ -176,6 +176,8 @@ if [ "$WITH_LINK" = 1 ]; then
         *":$BIN_DIR:"*) ;;
         *) warn "$BIN_DIR isn't on your PATH. Add it (e.g. in ~/.bashrc: export PATH=\"$BIN_DIR:\$PATH\") or run $VENV/bin/spotarchive." ;;
     esac
+elif [ "$WITH_LINK" = 1 ]; then
+    step "Skipped linking the command. Run $VENV/bin/spotarchive, or link it later: ln -s $VENV/bin/spotarchive $BIN_DIR/spotarchive"
 fi
 
 "$VENV/bin/spotarchive" --version >/dev/null || die "The installed spotarchive command doesn't start."

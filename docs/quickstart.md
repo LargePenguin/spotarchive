@@ -1,18 +1,18 @@
 # Quickstart
 
 > [!WARNING]
-> Spotarchive is still being built. Everything on this page works today.
+> Spotarchive is still in early development. If you encounter any problems, please open an issue.
 
 ## Legal note
 
-Spotarchive never acquires music from Spotify. The only data taken from Spotify is information about the contents of your playlists. Audio is sourced through a download backend by legal means.
+Spotarchive never acquires music from Spotify. The only data taken from Spotify is information about the contents of your playlists. Audio is sourced through a download backend of your choice (currently only SomeDL is implemented; please feel free to request/implement other backends and open a PR)
 
 ## Requirements
 
 - Python 3.10 or newer
 - Linux or Windows
 - A web browser for the login step
-- [SomeDL](https://github.com/ChemistryGull/SomeDL) (the default download backend) and [FFmpeg](https://ffmpeg.org/)
+- [SomeDL](https://github.com/ChemistryGull/SomeDL) (the default download backend) and [FFmpeg](https://ffmpeg.org/). Both should be fetched by the included install scripts.
 
 ## 1. Install
 
@@ -37,12 +37,12 @@ The install script:
 3. downloads the Chromium browser used for [logging in](authentication.md#which-browser-is-used);
 4. installs [FFmpeg](https://ffmpeg.org/), which SomeDL needs, if it's missing. It asks first, then uses your package manager (apt, dnf, pacman, zypper or apk) or winget on Windows;
 5. creates the [configuration file](configuration.md) `spotarchive.toml` in that folder from `spotarchive.example.toml`, unless it already exists;
-6. puts the `spotarchive` command on your `PATH`. On Linux it's linked into `~/.local/bin`. On Windows it goes into `%LOCALAPPDATA%\spotarchive\bin`, which is added to your user `PATH`, so open a new terminal afterwards.
+6. asks whether to put the `spotarchive` command on your `PATH` (`--yes`/`-Yes` says yes, `--no-link`/`-NoLink` skips the question; without a terminal it's skipped). On Linux it's linked into `~/.local/bin`. On Windows it goes into `%LOCALAPPDATA%\spotarchive\bin`, which is added to your user `PATH`, so open a new terminal afterwards.
 
 Running it again repairs or updates the install. If you already have a clone, run `./install.sh` or `powershell -ExecutionPolicy Bypass -File install.ps1` inside it to install that clone instead.
 
 > [!TIP]
-> Options: `--dir`/`-Dir` (where to clone), `--bin-dir`/`-BinDir` (where the command goes), `--no-browser`/`-NoBrowser` (skip Chromium if you use Chrome or Edge), `--no-ffmpeg`/`-NoFfmpeg`, `--no-link`/`-NoLink`, `--dev`/`-Dev` (test dependencies) and `--yes`/`-Yes` (don't ask). When piping the script, pass Linux options as `bash -s -- --no-browser`. On Windows, set `SPOTARCHIVE_DIR` or `SPOTARCHIVE_BIN_DIR` beforehand instead.
+> Options: `--dir`/`-Dir` (where to clone), `--bin-dir`/`-BinDir` (where the command goes), `--no-browser`/`-NoBrowser` (skip Chromium if you use Chrome or Edge), `--no-ffmpeg`/`-NoFfmpeg`, `--no-link`/`-NoLink`, `--dev`/`-Dev` (test dependencies) and `--yes`/`-Yes` (don't ask, say yes to everything). When piping the script, pass Linux options as `bash -s -- --no-browser`. On Windows, set `SPOTARCHIVE_DIR` or `SPOTARCHIVE_BIN_DIR` beforehand instead.
 
 <details>
 <summary>Installing by hand</summary>
@@ -73,6 +73,10 @@ spotarchive --login
 ```
 
 A browser window opens at Spotify's login page. Sign in; once Spotify forwards you to the web player, Spotarchive closes the window by itself, captures the session and caches it in the data folder. Running plain `spotarchive` starts this step automatically if there is no working login. Never share or commit the session file. Details: [Authentication](authentication.md).
+
+
+> [!NOTE]
+> Spotarchive does not directly capture or save your credentials. Your session info (stored in `data_dir/session.json`) is as important as credentials, so please treat the file as though it did contain raw credentials. Do not upload it; do not include it in any issues; never check it into source control.
 
 ## 3. Fetch your playlists
 

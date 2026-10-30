@@ -7,8 +7,8 @@
 # Installs Spotarchive with all its dependencies into a virtualenv (.venv) in
 # the project folder: the Python packages, SomeDL (the default download
 # backend), the Chromium browser used for logging in and FFmpeg (via winget).
-# Then puts a `spotarchive` command on your user PATH. Safe to run again to
-# repair or update an install.
+# Then, if you agree, puts a `spotarchive` command on your user PATH. Safe to
+# run again to repair or update an install.
 #
 # Parameters (also settable through the environment variables in brackets
 # when piping into iex):
@@ -18,9 +18,9 @@
 #                 default %LOCALAPPDATA%\spotarchive\bin]
 #   -NoBrowser    don't install Playwright's Chromium (Chrome or Edge is used instead)
 #   -NoFfmpeg     don't install FFmpeg
-#   -NoLink       don't put the command on PATH
+#   -NoLink       don't put the command on PATH (and don't ask about it)
 #   -Dev          also install the test dependencies
-#   -Yes          don't ask before installing system packages
+#   -Yes          don't ask before adding the command to PATH or installing system packages
 [CmdletBinding()]
 param(
     [string]$Dir = $(if ($env:SPOTARCHIVE_DIR) { $env:SPOTARCHIVE_DIR } else { Join-Path $HOME "spotarchive" }),
@@ -155,7 +155,7 @@ if (-not $NoFfmpeg) {
 # --- Command ----------------------------------------------------------------
 
 $SpotarchiveExe = Join-Path $Venv "Scripts\spotarchive.exe"
-if (-not $NoLink) {
+if (-not $NoLink -and (Confirm-Action "Add the spotarchive command to your user PATH (in $BinDir) so you can run it from anywhere?")) {
     # A small launcher instead of adding .venv\Scripts to PATH, which would
     # also shadow python and pip.
     New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
@@ -168,6 +168,8 @@ if (-not $NoLink) {
     }
     Update-SessionPath
     Step "Installed the spotarchive command into $BinDir"
+} elseif (-not $NoLink) {
+    Step "Skipped adding the command to PATH. Run $SpotarchiveExe instead."
 }
 
 & $SpotarchiveExe --version | Out-Null
