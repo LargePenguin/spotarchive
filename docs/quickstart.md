@@ -37,12 +37,12 @@ The install script:
 3. downloads the Chromium browser used for [logging in](authentication.md#which-browser-is-used);
 4. installs [FFmpeg](https://ffmpeg.org/), which SomeDL needs, if it's missing. It asks first, then uses your package manager (apt, dnf, pacman, zypper or apk) or winget on Windows;
 5. creates the [configuration file](configuration.md) `spotarchive.toml` in that folder from `spotarchive.example.toml`, unless it already exists;
-6. puts the `spotarchive` command on your `PATH`. On Linux it's linked into `~/.local/bin`. On Windows it goes into `%LOCALAPPDATA%\spotarchive\bin`, which is added to your user `PATH`, so open a new terminal afterwards.
+6. asks whether to put the `spotarchive` command on your `PATH` (`--yes`/`-Yes` says yes, `--no-link`/`-NoLink` skips the question; without a terminal it's skipped). On Linux it's linked into `~/.local/bin`. On Windows it goes into `%LOCALAPPDATA%\spotarchive\bin`, which is added to your user `PATH`, so open a new terminal afterwards.
 
 Running it again repairs or updates the install. If you already have a clone, run `./install.sh` or `powershell -ExecutionPolicy Bypass -File install.ps1` inside it to install that clone instead.
 
 > [!TIP]
-> Options: `--dir`/`-Dir` (where to clone), `--bin-dir`/`-BinDir` (where the command goes), `--no-browser`/`-NoBrowser` (skip Chromium if you use Chrome or Edge), `--no-ffmpeg`/`-NoFfmpeg`, `--no-link`/`-NoLink`, `--dev`/`-Dev` (test dependencies) and `--yes`/`-Yes` (don't ask). When piping the script, pass Linux options as `bash -s -- --no-browser`. On Windows, set `SPOTARCHIVE_DIR` or `SPOTARCHIVE_BIN_DIR` beforehand instead.
+> Options: `--dir`/`-Dir` (where to clone), `--bin-dir`/`-BinDir` (where the command goes), `--no-browser`/`-NoBrowser` (skip Chromium if you use Chrome or Edge), `--no-ffmpeg`/`-NoFfmpeg`, `--no-link`/`-NoLink`, `--dev`/`-Dev` (test dependencies) and `--yes`/`-Yes` (don't ask, say yes to everything). When piping the script, pass Linux options as `bash -s -- --no-browser`. On Windows, set `SPOTARCHIVE_DIR` or `SPOTARCHIVE_BIN_DIR` beforehand instead.
 
 <details>
 <summary>Installing by hand</summary>
