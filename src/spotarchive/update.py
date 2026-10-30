@@ -1,14 +1,15 @@
-"""Self-update: compare against the version on GitHub and update a git install in place."""
+"""Self-update: compare against the version on GitHub and replace the install's files with a fresh download."""
 
 from __future__ import annotations
 
 import importlib.metadata
+import io
 import os
 import re
-import shutil
 import subprocess
 import sys
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath
 
 import requests
 
@@ -18,6 +19,7 @@ GITHUB_REPO = "LargePenguin/spotarchive"
 REPO_URL = f"https://github.com/{GITHUB_REPO}"
 # The version on GitHub is whatever __version__ says on the main branch.
 REMOTE_VERSION_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/src/spotarchive/__init__.py"
+ARCHIVE_URL = f"{REPO_URL}/archive/refs/heads/main.zip"
 VERSION_FILE = Path("src") / "spotarchive" / "__init__.py"
 
 # Set in the relaunched process after an update (and usable to opt out of the
@@ -72,45 +74,73 @@ def skip_check_requested() -> bool:
 
 
 def project_root(package_dir: Path | None = None) -> Path | None:
-    """The git clone Spotarchive runs from, or ``None`` if it wasn't installed from one."""
+    """The checkout Spotarchive runs from, or ``None`` if it isn't an editable install of one."""
     package_dir = package_dir or Path(spotarchive.__file__).resolve().parent
     root = package_dir.parent.parent
-    if (root / VERSION_FILE).is_file() and (root / "pyproject.toml").is_file() and (root / ".git").exists():
+    if (root / VERSION_FILE).is_file() and (root / "pyproject.toml").is_file():
         return root
     return None
 
 
-def install_update(root: Path, run=subprocess.run) -> str:
-    """Pull the latest version into the clone at ``root``; returns the new version.
+def download_archive(http=requests, timeout: float = 60) -> bytes:
+    """The zip of the repository's ``main`` branch."""
+    try:
+        response = http.get(ARCHIVE_URL, timeout=timeout)
+    except requests.RequestException as exc:
+        raise UpdateError(f"Couldn't download the update: {exc}") from exc
+    if not response.ok:
+        raise UpdateError(f"GitHub answered {response.status_code} {response.reason}.")
+    return response.content
+
+
+def extract_archive(data: bytes, root: Path) -> None:
+    """Write every file of a GitHub branch zip over the same path in ``root``.
+
+    Files that exist only locally (settings, data, the virtualenv) stay where
+    they are; they aren't part of the repository.
+    """
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile as exc:
+        raise UpdateError("The downloaded update isn't a valid zip file.") from exc
+    with archive:
+        # GitHub wraps everything in a single "<repo>-<branch>/" folder.
+        entries = [(info, PurePosixPath(info.filename).parts[1:]) for info in archive.infolist() if not info.is_dir()]
+        entries = [(info, parts) for info, parts in entries if parts and parts[0] != ".git"]
+        if not any(parts == VERSION_FILE.parts for _, parts in entries):
+            raise UpdateError("The downloaded update doesn't look like Spotarchive.")
+        root = root.resolve()
+        targets = []
+        for info, parts in entries:
+            if ".." in parts or PurePosixPath(*parts).is_absolute() or ":" in parts[0]:
+                raise UpdateError(f"The downloaded update contains an unsafe path: {info.filename}")
+            targets.append((info, root.joinpath(*parts)))
+        for info, target in targets:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Write beside the target first so a failure never leaves a half-written file.
+            temp = target.with_name(target.name + ".update-new")
+            temp.write_bytes(archive.read(info))
+            mode = (info.external_attr >> 16) & 0o777
+            if mode and os.name == "posix":
+                temp.chmod(mode)
+            os.replace(temp, target)
+
+
+def install_update(root: Path, run=subprocess.run, http=requests) -> str:
+    """Download the latest version over the checkout at ``root``; returns the new version.
 
     Dependencies are reinstalled only when ``pyproject.toml`` changed: the
-    install is editable, so the pulled code is used as is.
+    install is editable, so the new code is used as is. Files removed from the
+    repository since the installed version are left behind.
     """
     if (root / ".git").is_file():
         raise UpdateError(f"{root} is a git worktree; update the main checkout instead.")
-    git = shutil.which("git")
-    if git is None:
-        raise UpdateError("git is needed to update Spotarchive; install it and try again.")
 
-    def git_run(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-        # No credential prompts: the repository is public.
-        env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-        result = run([git, "-C", str(root), *args], capture_output=True, text=True, env=env)
-        if check and result.returncode != 0:
-            output = (result.stderr or result.stdout or "").strip()
-            raise UpdateError(f"`git {' '.join(args)}` failed: {output or f'exit code {result.returncode}'}")
-        return result
+    pyproject = root / "pyproject.toml"
+    before = pyproject.read_bytes() if pyproject.is_file() else None
+    extract_archive(download_archive(http=http), root)
 
-    before = git_run("rev-parse", "HEAD").stdout.strip()
-    git_run("pull", "--ff-only")
-    after = git_run("rev-parse", "HEAD").stdout.strip()
-    if before == after:
-        raise UpdateError(
-            f"`git pull` in {root} brought in nothing new; check that the clone is on the main branch."
-        )
-
-    changed = git_run("diff", "--quiet", before, after, "--", "pyproject.toml", check=False)
-    if changed.returncode != 0:
+    if pyproject.read_bytes() != before:
         extras = _installed_extras()
         target = f"{root}[{','.join(extras)}]" if extras else str(root)
         if run([sys.executable, "-m", "pip", "install", "--editable", target]).returncode != 0:

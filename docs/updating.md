@@ -1,6 +1,6 @@
 # Updating
 
-Spotarchive can update itself from GitHub.
+Spotarchive can update itself from GitHub, without git.
 
 ## Checking and updating
 
@@ -24,21 +24,20 @@ To skip the check, e.g. when you're offline, set the environment variable `SPOTA
 
 ## How the update works
 
-Spotarchive can update itself when it runs from a git clone, which is what the [install script](quickstart.md#1-install) sets up. Updating:
+Spotarchive updates the checkout it runs from, which is what the [install script](quickstart.md#1-install) sets up. Git isn't needed. Updating:
 
-1. runs `git pull --ff-only` in the clone;
-2. reinstalls the Python dependencies into the clone's virtualenv, only if `pyproject.toml` changed. Installed extras (SomeDL, test dependencies) are kept. The install is editable, so the pulled code is used directly otherwise.
+1. downloads the `main` branch of the repository from GitHub as a zip file and writes every file in it over the same file in the checkout;
+2. reinstalls the Python dependencies into the checkout's virtualenv, only if `pyproject.toml` changed. Installed extras (SomeDL, test dependencies) are kept. The install is editable, so the new code is used directly otherwise.
 
-Your data folder, login and settings aren't touched.
+Your data folder, login and settings (`spotarchive.toml`) aren't touched, since they aren't part of the repository. Files you changed by hand *are* overwritten, and files that were removed from the repository since your version are left behind (harmless).
 
 > [!NOTE]
 > Only a change of the version number counts as an update. Changes merged on GitHub without a new version number aren't offered.
 
 ## When the update fails
 
-- **"this install isn't a git clone"**: Spotarchive was installed some other way (e.g. `pip install` from a download). Run the [install script](quickstart.md#1-install) again to update.
-- **`git pull` failed**: usually because files in the clone were changed by hand or the clone has its own commits. Spotarchive never discards local changes. Undo them (`git -C <clone> status` shows them) or run `git pull` in the clone yourself.
-- **"brought in nothing new"**: the clone isn't on the `main` branch (`git -C <clone> switch main`), or it pulls from a different remote.
+- **"this install isn't an editable checkout"**: Spotarchive was installed some other way (e.g. `pip install` from a download). Run the [install script](quickstart.md#1-install) again to update.
+- **"Couldn't download the update"** or a GitHub error: check your connection and try again.
 - **Reinstalling the dependencies failed**: the code is already updated. Run the install script again to repair the install.
 
 In a plain run, a failed update is reported as a warning, and the run continues with the installed version.
