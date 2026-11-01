@@ -12,7 +12,7 @@
 #
 # Parameters (also settable through the environment variables in brackets
 # when piping into iex):
-#   -Dir DIR      where to clone Spotarchive when not run from a clone
+#   -Dir DIR      where to download Spotarchive when not run from a checkout
 #                 [SPOTARCHIVE_DIR, default %USERPROFILE%\spotarchive]
 #   -BinDir DIR   where to put the command [SPOTARCHIVE_BIN_DIR,
 #                 default %LOCALAPPDATA%\spotarchive\bin]
@@ -33,7 +33,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$RepoUrl = "https://github.com/LargePenguin/spotarchive.git"
+$ArchiveUrl = "https://github.com/LargePenguin/spotarchive/archive/refs/heads/main.zip"
 
 function Step($Message) { Write-Host "==> " -ForegroundColor Green -NoNewline; Write-Host $Message }
 function Warn($Message) { Write-Host "[!] $Message" -ForegroundColor Yellow }
@@ -68,18 +68,29 @@ $pyproject = if ($ScriptDir) { Join-Path $ScriptDir "pyproject.toml" } else { $n
 if ($pyproject -and (Test-Path $pyproject) -and (Select-String -Path $pyproject -Pattern '^name = "spotarchive"' -Quiet)) {
     $ProjectDir = $ScriptDir
     Step "Using the Spotarchive folder $ProjectDir"
-} elseif (Test-Path (Join-Path $Dir ".git") -PathType Container) {
-    $ProjectDir = $Dir
-    Step "Updating $ProjectDir"
-    & git -C $ProjectDir pull --ff-only
-    if ($LASTEXITCODE -ne 0) { Warn "Couldn't update the clone; installing the version that's there." }
 } else {
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        Die "git is needed to download Spotarchive. Install it (winget install Git.Git) and run this again."
+    $pp = Join-Path $Dir "pyproject.toml"
+    if ((Test-Path $pp) -and (Select-String -Path $pp -Pattern '^name = "spotarchive"' -Quiet)) {
+        Step "Updating $Dir"
+    } elseif ((Test-Path $Dir) -and (Get-ChildItem -Force $Dir | Select-Object -First 1)) {
+        Die "$Dir already exists and isn't a Spotarchive folder. Pick another folder with -Dir."
+    } else {
+        Step "Downloading Spotarchive into $Dir"
     }
-    if (Test-Path $Dir) { Die "$Dir already exists and isn't a Spotarchive clone. Pick another folder with -Dir." }
-    Step "Downloading Spotarchive into $Dir"
-    Invoke-Checked git clone --depth 1 $RepoUrl $Dir
+    $temp = Join-Path ([IO.Path]::GetTempPath()) ("spotarchive-" + [Guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $temp | Out-Null
+    try {
+        $zip = Join-Path $temp "main.zip"
+        $ProgressPreference = "SilentlyContinue"
+        Invoke-WebRequest -Uri $ArchiveUrl -OutFile $zip -UseBasicParsing
+        Expand-Archive -Path $zip -DestinationPath $temp -Force
+        $inner = Get-ChildItem -Directory $temp | Select-Object -First 1
+        New-Item -ItemType Directory -Path $Dir -Force | Out-Null
+        # Files are written over the existing ones; settings, data and .venv aren't in the archive, so they stay.
+        Copy-Item -Path (Join-Path $inner.FullName "*") -Destination $Dir -Recurse -Force
+    } finally {
+        Remove-Item -Recurse -Force $temp -ErrorAction SilentlyContinue
+    }
     $ProjectDir = $Dir
 }
 
