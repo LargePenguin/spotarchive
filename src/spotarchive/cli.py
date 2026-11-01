@@ -56,6 +56,10 @@ def build_parser() -> argparse.ArgumentParser:
         "-l", "--login", nargs="?", const=True, metavar="SITE",
         help="log in to SITE (spotify or youtube) in a browser window; asks which without SITE",
     )
+    parser.add_argument(
+        "--cookies", type=Path, metavar="FILE",
+        help="with --login youtube: import the login from a cookies.txt exported from your browser instead",
+    )
     parser.add_argument("-f", "--fetch", action="store_true", help="choose playlists and rebuild their setlist.csv files")
     parser.add_argument(
         "-n", "--noselect", action="store_true",
@@ -107,8 +111,14 @@ def _duration(seconds: float) -> str:
     return f"about {round(minutes / 60)} hours"
 
 
-def run_login(store: SessionStore, site: str | bool, browser: str = "") -> None:
-    """``--login [SITE]``: log in to *site*, or ask which (``True``)."""
+def run_login(store: SessionStore, site: str | bool, browser: str = "", cookies: Path | None = None) -> None:
+    """``--login [SITE]``: log in to *site*, or ask which (``True``).
+
+    With *cookies* (``--cookies``) the YouTube login comes from that file.
+    """
+    if cookies is not None:
+        import_youtube_cookies(store, cookies)
+        return
     if site is True:
         site = choose_login_site()
     if site == "youtube":
@@ -152,6 +162,14 @@ def run_youtube_login(store: SessionStore, browser: str = "") -> None:
     store.offer_youtube_login = True
     store.save()
     ui.ok("Logged in to YouTube; age-restricted songs can be downloaded now.")
+
+
+def import_youtube_cookies(store: SessionStore, path: Path) -> None:
+    store.youtube = youtube_auth.import_cookies(path)
+    store.offer_youtube_login = True
+    store.save()
+    ui.ok(f"Imported the YouTube login ({len(store.youtube.cookies)} youtube.com cookies).")
+    ui.warn(f"{path} still holds your login; delete it unless you need it.")
 
 
 def offer_youtube_login(store: SessionStore, browser: str = "") -> None:
@@ -464,6 +482,11 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
         args.login = args.login.lower()
         if args.login not in LOGIN_SITES:
             parser.error(f"unknown login site {args.login!r}: use `-l spotify` or `-l youtube`")
+    if args.cookies is not None:
+        if args.login is True:
+            args.login = "youtube"
+        if args.login != "youtube":
+            parser.error("--cookies only works together with --login youtube")
     if args.noselect and not args.fetch:
         parser.error("--noselect only works together with --fetch (e.g. -fn)")
     if args.update and (args.login or args.fetch or args.download or args.meta):
@@ -480,7 +503,7 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
         data_dir = settings.data_dir if data_dir is None else data_dir
         store = SessionStore.load(data_dir)
         if args.login:
-            run_login(store, args.login, settings.login_browser)
+            run_login(store, args.login, settings.login_browser, args.cookies)
         if plain:
             ensure_login(store, settings.login_browser)
             offer_youtube_login(store, settings.login_browser)

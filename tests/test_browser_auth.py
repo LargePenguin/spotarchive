@@ -126,13 +126,14 @@ def cookie(value):
 
 
 class FakeWindow:
-    """Stands in for the login window: a headless browser with a DevTools
-    port on the *site* fakes, where a fake user goes through *steps* (logging
-    in or not), then lingers and closes the window unless spotarchive closes
-    it first."""
+    """Stands in for the login window: a headless browser (with a DevTools
+    port if *debug_port*) on the *site* fakes, where a fake user goes through
+    *steps* (logging in or not), then lingers and closes the window unless
+    spotarchive closes it first."""
 
-    def __init__(self, executable, profile_dir, url, site, steps, linger):
+    def __init__(self, executable, profile_dir, url, site, steps, linger, debug_port=True):
         self.profile_dir = profile_dir
+        self.debug_port_enabled = debug_port
         self.errors = []
         # The sync API can't nest in one thread, and interactive_login already
         # runs Playwright in this one.
@@ -148,7 +149,7 @@ class FakeWindow:
         with sync_playwright() as p:
             context = p.chromium.launch_persistent_context(
                 str(self.profile_dir), executable_path=str(executable), headless=True,
-                args=["--remote-debugging-port=0"],
+                args=["--remote-debugging-port=0"] if self.debug_port_enabled else [],
             )
             closed = threading.Event()
             context.on("close", lambda _: closed.set())
@@ -181,8 +182,11 @@ class FakeWindow:
 def fake_user(log_in, reach_player=False, site=fake_spotify, steps=None):
     steps = steps or spotify_user(log_in, reach_player)
 
-    def open_browser(executable, profile_dir, url):
-        window = FakeWindow(executable, profile_dir, url, site, steps, 30 if log_in else 10)
+    def open_browser(executable, profile_dir, url, debug_port=True):
+        # Without a port nobody closes the window for the user, who closes it
+        # right after logging in.
+        linger = (30 if log_in else 10) if debug_port else 1
+        window = FakeWindow(executable, profile_dir, url, site, steps, linger, debug_port)
         windows.append(window)
         return window
 
@@ -262,6 +266,8 @@ def test_youtube_login_captures_youtube_cookies_and_closes_window(tmp_path):
     assert youtube_auth.is_logged_in(session)
     assert session.user_agent and "HeadlessChrome" not in session.user_agent
     assert not open_browser.windows[0].is_open()
+    # Google's sign-in refuses a browser with a DevTools port.
+    assert not open_browser.windows[0].debug_port_enabled
 
 
 def test_youtube_login_closed_without_logging_in(tmp_path):

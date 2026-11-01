@@ -80,7 +80,7 @@ Optionally, log in to YouTube as well, so age-restricted songs can be downloaded
 spotarchive --login youtube
 ```
 
-Plain `spotarchive` offers this after the Spotify login (yes, not now, or don't ask again). Details: [Logging in to YouTube](authentication.md#logging-in-to-youtube-optional).
+Sign in to Google in the window that opens, and close the window yourself once YouTube shows you logged in. Plain `spotarchive` offers this after the Spotify login (yes, not now, or don't ask again). If the window doesn't work for you, `spotarchive --login youtube --cookies cookies.txt` imports a login exported from your own browser. Details: [Logging in to YouTube](authentication.md#logging-in-to-youtube-optional).
 
 
 > [!NOTE]

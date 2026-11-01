@@ -2,11 +2,21 @@
 
 The login window is started as a plain process, not driven by Playwright: an
 automated browser (``navigator.webdriver``, a throwaway profile, a debugger
-attached to the page) gets stuck in endless captchas on login pages. While
-the user logs in, spotarchive only polls the window's DevTools HTTP endpoint
-for the URLs of its tabs; it connects over DevTools once a tab has reached
-the site's logged-in page, reads the cookies and user agent, and asks the
-window to quit.
+attached to the page) gets stuck in endless captchas on login pages.
+
+There are two ways to find out when the login is done:
+
+- *Watched* sites (Spotify): the window gets a DevTools port. While the user
+  logs in, spotarchive only polls its HTTP endpoint for the URLs of the tabs;
+  it connects over DevTools once a tab has reached the site's logged-in page,
+  reads the cookies and user agent, and asks the window to quit.
+- Unwatched sites (Google/YouTube): any DevTools port turns
+  ``navigator.webdriver`` on, and Google's sign-in refuses such a browser as
+  "not secure". So the window has no port at all, and the user closes it once
+  logged in. Then the same browser opens the profile headless (with a port,
+  but loading no page) and the cookies are read from it. The browser
+  decrypts its own cookie store, which nothing else can do reliably (e.g.
+  Chrome's app-bound cookie encryption on Windows).
 
 Each site (see :mod:`spotarchive.spotify.auth` and
 :mod:`spotarchive.youtube.auth`) supplies its login URL, which pages count
@@ -30,6 +40,8 @@ LOGIN_TIMEOUT_S = 600
 # counts as not logged in (yet).
 LOGIN_COOKIE_WAIT_S = 3
 CLOSE_TIMEOUT_S = 10
+# How long the headless browser that reads a closed window's profile may take to start.
+HEADLESS_START_TIMEOUT_S = 30
 POLL_MS = 500
 # Where Chromium writes the DevTools port it picked for --remote-debugging-port=0.
 DEBUG_PORT_FILE = "DevToolsActivePort"
@@ -92,6 +104,9 @@ class LoginSite:
     keep_cookies: Callable[[list[dict]], list[dict]]
     # True when the kept cookies hold a login.
     has_login: Callable[[list[dict]], bool]
+    # False: the window gets no DevTools port, and the user closes it once
+    # logged in (see the module docstring).
+    watch_window: bool = True
 
 
 def installed_browsers() -> list[Path]:
@@ -167,12 +182,16 @@ def login_browser(playwright, browser: str | None = None) -> Path | str:
     return candidates[0]
 
 
-def login_browser_command(executable: Path | str, profile_dir: Path, url: str) -> list[str]:
+def login_browser_command(
+    executable: Path | str, profile_dir: Path, url: str, debug_port: bool = True, headless: bool = False
+) -> list[str]:
     """A plain (not automated) browser window on its own profile.
 
     The DevTools port (picked by the browser, see :func:`read_debug_port`)
     only lets spotarchive see which page the window is on; nothing attaches
-    to the page while the user logs in.
+    to the page while the user logs in. Without *debug_port* there is none,
+    so ``navigator.webdriver`` stays false. *headless* opens no window; it's
+    for reading a profile's cookies.
     """
     if str(executable).startswith(FLATPAK_PREFIX):
         # The sandbox needs access to the profile folder (it holds the port file).
@@ -182,7 +201,8 @@ def login_browser_command(executable: Path | str, profile_dir: Path, url: str) -
     return [
         *launcher,
         f"--user-data-dir={profile_dir}",
-        "--remote-debugging-port=0",
+        *(["--remote-debugging-port=0"] if debug_port else []),
+        *(["--headless=new"] if headless else []),
         # No --disable-blink-features=AutomationControlled here: current Chrome
         # no longer supports it and shows a warning banner in the window.
         "--no-first-run",
@@ -190,7 +210,7 @@ def login_browser_command(executable: Path | str, profile_dir: Path, url: str) -
         # Keep the profile's cookies out of the system keyring (no prompt).
         "--password-store=basic",
         "--use-mock-keychain",
-        "--new-window",
+        *([] if headless else ["--new-window"]),
         url,
     ]
 
@@ -213,11 +233,13 @@ class LoginWindow(Protocol):
 class BrowserProcess:
     """The login window, started as a plain browser process."""
 
-    def __init__(self, executable: Path | str, profile_dir: Path, url: str):
+    def __init__(
+        self, executable: Path | str, profile_dir: Path, url: str, debug_port: bool = True, headless: bool = False
+    ):
         self.profile_dir = profile_dir
         try:
             self._process = subprocess.Popen(
-                login_browser_command(executable, profile_dir, url),
+                login_browser_command(executable, profile_dir, url, debug_port, headless),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -244,8 +266,15 @@ class BrowserProcess:
             self._process.kill()
 
 
-def open_login_browser(executable: Path | str, profile_dir: Path, url: str) -> LoginWindow:
-    return BrowserProcess(executable, profile_dir, url)
+def open_login_browser(
+    executable: Path | str, profile_dir: Path, url: str, debug_port: bool = True
+) -> LoginWindow:
+    return BrowserProcess(executable, profile_dir, url, debug_port)
+
+
+def open_headless_browser(executable: Path | str, profile_dir: Path) -> LoginWindow:
+    """The same browser on *profile_dir*, headless, with a DevTools port and no page loaded."""
+    return BrowserProcess(executable, profile_dir, "about:blank", debug_port=True, headless=True)
 
 
 def page_urls(port: int) -> list[str]:
@@ -313,6 +342,80 @@ def _wait_for_login(playwright, window: LoginWindow, site: LoginSite, timeout_s:
     raise LoginCancelled(f"The login didn't finish within {timeout_s // 60} minutes.")
 
 
+def _wait_for_close(window: LoginWindow, timeout_s: int) -> None:
+    """Wait until the user has closed the (unwatched) login window."""
+    deadline = time.monotonic() + timeout_s
+    while window.is_open():
+        if time.monotonic() >= deadline:
+            raise LoginCancelled(
+                f"The browser window was still open after {timeout_s // 60} minutes; "
+                "close it once you're logged in."
+            )
+        time.sleep(POLL_MS / 1000)
+
+
+def _read_profile_login(
+    playwright,
+    executable: Path | str,
+    profile_dir: Path,
+    site: LoginSite,
+    open_headless: Callable[[Path | str, Path], LoginWindow],
+) -> tuple[list[dict], str]:
+    """Read the login from the closed window's profile, with the same browser started headless."""
+    (profile_dir / DEBUG_PORT_FILE).unlink(missing_ok=True)
+    reader = open_headless(executable, profile_dir)
+    try:
+        deadline = time.monotonic() + HEADLESS_START_TIMEOUT_S
+        while (port := reader.debug_port()) is None:
+            if not reader.is_open() or time.monotonic() >= deadline:
+                raise AuthError("The browser didn't start in the background to read the login.")
+            time.sleep(POLL_MS / 1000)
+        browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
+        try:
+            cdp = browser.new_browser_cdp_session()
+            cookies = site.keep_cookies(browser.contexts[0].cookies())
+            user_agent = cdp.send("Browser.getVersion")["userAgent"]
+            cdp.send("Browser.close")
+        finally:
+            try:
+                browser.close()  # only disconnects from a browser it didn't launch
+            except Exception:
+                pass
+    finally:
+        reader.close()
+    if not site.has_login(cookies):
+        raise LoginCancelled(f"The browser was closed before the {site.name} login finished.")
+    return cookies, user_agent
+
+
+def _capture_unwatched(
+    playwright,
+    executable: Path | str,
+    profile_dir: Path,
+    site: LoginSite,
+    timeout_s: int,
+    on_status: Callable[[str], None],
+    open_browser: Callable[..., LoginWindow],
+    open_headless: Callable[[Path | str, Path], LoginWindow],
+) -> tuple[list[dict], str]:
+    from playwright.sync_api import Error as PlaywrightError
+
+    window = open_browser(executable, profile_dir, site.login_url, debug_port=False)
+    on_status(
+        f"Log in to {site.name} in the browser window that just opened, "
+        f"then close the window once {site.name} shows you're logged in."
+    )
+    try:
+        _wait_for_close(window, timeout_s)
+    finally:
+        window.close()
+    on_status("Reading the login from the browser profile...")
+    try:
+        return _read_profile_login(playwright, executable, profile_dir, site, open_headless)
+    except PlaywrightError as exc:
+        raise AuthError(f"Reading the login failed: {str(exc).splitlines()[0]}") from exc
+
+
 def prepare_profile(profile_dir: Path) -> None:
     profile_dir.mkdir(parents=True, exist_ok=True)
     if os.name == "posix":
@@ -327,17 +430,20 @@ def capture_login(
     profile_dir: Path,
     timeout_s: int = LOGIN_TIMEOUT_S,
     on_status: Callable[[str], None] = lambda msg: None,
-    open_browser: Callable[[Path, Path, str], LoginWindow] = open_login_browser,
+    open_browser: Callable[..., LoginWindow] = open_login_browser,
     browser: str | None = None,
+    open_headless: Callable[[Path | str, Path], LoginWindow] = open_headless_browser,
 ) -> tuple[list[dict], str]:
     """Let the user log in to *site* in a normal browser window.
 
-    Returns the kept cookies and the browser's user agent, read from the
-    running window, which is then closed. The window uses *profile_dir* as
-    its profile, which is kept so the site recognises the device on later
+    Returns the kept cookies and the browser's user agent. For a watched
+    site they're read from the running window, which is then closed; for an
+    unwatched one the user closes the window and they're read from its
+    profile (see the module docstring). The window uses *profile_dir* as its
+    profile, which is kept so the site recognises the device on later
     logins. *browser* names the browser to use (see :data:`NAMED_BROWSERS`);
     by default the first installed Chrome, Edge or Playwright's Chromium.
-    *open_browser* exists for tests.
+    *open_browser* and *open_headless* exist for tests.
     """
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import sync_playwright
@@ -347,6 +453,10 @@ def capture_login(
     with sync_playwright() as p:
         executable = login_browser(p, browser)
         on_status(describe_browser(executable))
+        if not site.watch_window:
+            return _capture_unwatched(
+                p, executable, profile_dir, site, timeout_s, on_status, open_browser, open_headless
+            )
         window = open_browser(executable, profile_dir, site.login_url)
         on_status(
             f"Log in to {site.name} in the browser window that just opened; "

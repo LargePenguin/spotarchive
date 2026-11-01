@@ -142,6 +142,31 @@ def test_login_browser_is_not_automated(tmp_path):
     assert not any(arg.startswith("--disable-blink-features") for arg in cmd)
 
 
+def test_unwatched_login_window_has_no_debug_port(tmp_path):
+    # Any DevTools port turns navigator.webdriver on, which Google's sign-in refuses.
+    cmd = login_browser_command(Path("/fake/chrome"), tmp_path / "profile", LOGIN_URL, debug_port=False)
+    assert not any("remote-debugging" in arg or arg.startswith("--headless") for arg in cmd)
+    assert "--new-window" in cmd
+
+
+def test_headless_profile_reader_command(tmp_path):
+    cmd = login_browser_command(Path("/fake/chrome"), tmp_path / "profile", "about:blank", headless=True)
+    assert "--headless=new" in cmd and "--remote-debugging-port=0" in cmd
+    assert "--new-window" not in cmd
+    # Same cookie encryption settings as the window, so it can read its cookies.
+    assert "--password-store=basic" in cmd
+
+
+class OpenWindow:
+    def is_open(self):
+        return True
+
+
+def test_unwatched_window_left_open_times_out():
+    with pytest.raises(browser.LoginCancelled, match="still open"):
+        browser._wait_for_close(OpenWindow(), timeout_s=0)
+
+
 def test_installed_browsers_on_linux(tmp_path, monkeypatch):
     chrome = tmp_path / "google-chrome"
     chrome.write_text("")

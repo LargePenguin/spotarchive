@@ -437,6 +437,46 @@ def test_login_without_site_and_terminal_fails(tmp_path, capsys):
     assert "-l youtube" in " ".join(capsys.readouterr().out.split())
 
 
+FAKE_COOKIES_TXT = ".youtube.com\tTRUE\t/\tTRUE\t4102444800\tSAPISID\tdummy-cookie\n"
+
+
+def no_browser_logins(monkeypatch):
+    monkeypatch.setattr(cli, "youtube_login", lambda *a, **kw: pytest.fail("should not open a browser"))
+    monkeypatch.setattr(cli, "interactive_login", lambda *a, **kw: pytest.fail("should not open a browser"))
+
+
+@pytest.mark.parametrize("argv", [["-l", "youtube"], ["-l"]])
+def test_login_youtube_from_cookie_file(tmp_path, monkeypatch, capsys, argv):
+    no_browser_logins(monkeypatch)
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text(FAKE_COOKIES_TXT)
+    store = SessionStore.load(tmp_path)
+    store.offer_youtube_login = False
+    store.save()
+    assert cli.main([*argv, "--cookies", str(cookies)], data_dir=tmp_path) == 0
+    store = SessionStore.load(tmp_path)
+    assert [c["value"] for c in store.youtube.cookies] == ["dummy-cookie"]
+    assert store.offer_youtube_login is True
+    # The exported file still holds the login.
+    assert "delete it" in " ".join(capsys.readouterr().out.split())
+
+
+def test_cookie_file_without_youtube_login_fails(tmp_path, monkeypatch, capsys):
+    no_browser_logins(monkeypatch)
+    cookies = tmp_path / "cookies.txt"
+    cookies.write_text("# Netscape HTTP Cookie File\n")
+    assert cli.main(["-l", "youtube", "--cookies", str(cookies)], data_dir=tmp_path) == 1
+    assert "no YouTube login" in " ".join(capsys.readouterr().out.split())
+    assert SessionStore.load(tmp_path).youtube is None
+
+
+@pytest.mark.parametrize("argv", [["--cookies", "c.txt"], ["-l", "spotify", "--cookies", "c.txt"],
+                                  ["-f", "--cookies", "c.txt"]])
+def test_cookies_needs_youtube_login(tmp_path, argv):
+    with pytest.raises(SystemExit):
+        cli.main(argv, data_dir=tmp_path)
+
+
 def test_login_without_site_cancelled(tmp_path, monkeypatch):
     answer_prompts(monkeypatch, None)
     assert cli.main(["-l"], data_dir=tmp_path) == 130

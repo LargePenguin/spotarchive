@@ -7,6 +7,7 @@ Spotarchive logs in to Spotify through a real browser window, the same way you w
 ```bash
 spotarchive --login spotify    # or: spotarchive -l spotify
 spotarchive --login youtube    # optional, see below
+spotarchive --login youtube --cookies cookies.txt   # or import it from your browser
 spotarchive --login            # asks which site
 ```
 
@@ -32,9 +33,12 @@ spotarchive --login youtube    # or: spotarchive -l youtube
 
 1. A browser window opens at Google's sign-in page for YouTube.
 2. Sign in with the Google account you use on YouTube.
-3. Once Google sends the window on to YouTube, Spotarchive reads the youtube.com cookies from it, closes the window by itself and saves the login.
+3. Once YouTube shows you logged in (your avatar at the top right), **close the window yourself**.
+4. Spotarchive then opens the window's profile in a hidden (headless) browser, without loading any page, reads the youtube.com cookies from it and saves the login.
 
-It uses the same kind of window as the Spotify login (see [which browser is used](#which-browser-is-used)), with a separate profile, and waits up to 10 minutes as well.
+It uses the same browser as the Spotify login (see [which browser is used](#which-browser-is-used)), with a separate profile, and waits up to 10 minutes for you to close the window.
+
+Unlike the Spotify window, this one has no DevTools port, so Spotarchive can't see which page it's on and doesn't close it for you. Google's sign-in refuses any browser with such a port open ("This browser or app may not be secure"), whichever browser it is, because the port makes the browser report itself as automated. If closing the window doesn't work for you, or Google still refuses the sign-in, [import the login from your own browser](#importing-a-youtube-login-from-your-browser) instead.
 
 Plain `spotarchive` offers the YouTube login after the Spotify one whenever there's no working YouTube login (none saved, or the saved one has expired):
 
@@ -52,6 +56,25 @@ Plain `spotarchive` offers the YouTube login after the Spotify one whenever ther
 The question is only asked in a terminal, and only by plain `spotarchive`, never by `--fetch`, `--download` or `--meta`.
 
 Spotarchive itself never talks to YouTube with the login. It hands the cookies to the [download backend](backends.md#youtube-login), which passes them to its helper (SomeDL passes them on to yt-dlp). YouTube doesn't say when a login stops working, so Spotarchive only notices a login has expired from the cookies' expiry dates. If age-restricted songs keep failing while you're logged in, [log in again](#troubleshooting).
+
+### Importing a YouTube login from your browser
+
+If the login window doesn't work for you, export your YouTube cookies from the browser you normally use and import them:
+
+```bash
+spotarchive --login youtube --cookies cookies.txt
+```
+
+The file must be in the Netscape `cookies.txt` format that yt-dlp reads. Browser extensions that export cookies offer it (look for "cookies.txt" or "Netscape format"), and so does `yt-dlp --cookies-from-browser <browser> --cookies cookies.txt --skip-download <any YouTube URL>`. Only the youtube.com cookies are imported, and only if they hold a login (an unexpired `SAPISID` cookie); everything else in the file is ignored. Without a site, `--login --cookies FILE` means YouTube too.
+
+YouTube replaces (rotates) the login cookies of a tab that stays open, which can make an exported copy stop working soon after. yt-dlp therefore [recommends](https://github.com/yt-dlp/yt-dlp/wiki/Extractors#exporting-youtube-cookies) exporting from a private (incognito) window:
+
+1. Open a private window and log in to YouTube there.
+2. In that same window, open <https://www.youtube.com/robots.txt> (so no YouTube page is open any more), and export the youtube.com cookies.
+3. Close the private window, so that login is never used in the browser again.
+
+> [!WARNING]
+> The exported file is your Google login. Delete it after importing (Spotarchive reminds you), and never share or commit it.
 
 ## Which browser is used
 
@@ -77,7 +100,7 @@ The login is saved in `session.json` at the root of the download folder (default
 | Query hashes | Identifiers of the web player's API requests, read from its JavaScript; see [where the data comes from](fetching.md#where-the-data-comes-from). Not secret. |
 | Your display name and user ID | Shown after logging in. |
 | youtube.com cookies | Only with the [YouTube login](#logging-in-to-youtube-optional). The cookies that keep you logged in to YouTube, handed to the download helper. Google's and other sites' cookies are never saved. |
-| YouTube user agent | The browser identity the YouTube cookies belong to. |
+| YouTube user agent | The browser identity the YouTube cookies belong to (empty for an [imported](#importing-a-youtube-login-from-your-browser) login). |
 | Whether to offer the YouTube login | `false` once you've picked "don't ask again". |
 
 On Linux the file is created readable only by your user (mode `600`).
@@ -106,7 +129,10 @@ If the cookies themselves have expired (Spotify only issues a logged-out token),
 - **"The saved Spotify login has expired"**: run `spotarchive --login spotify`.
 - **"unknown login site"**: `--login` takes `spotify` or `youtube`. Since it takes a site, it can't be combined with other short options in one group: write `spotarchive -l spotify -f`, not `-lf`.
 - **Age-restricted songs fail although you're logged in to YouTube** (yt-dlp says the video is age-restricted, or asks you to sign in): the login may have been invalidated, for example because you logged out of that Google account on all devices or changed its password. Run `spotarchive --login youtube` again. The account also needs to be age-verified with Google.
-- **The YouTube window doesn't close after signing in**: Spotarchive waits for the window to reach a YouTube page. If Google leaves you on an account page instead, open <https://www.youtube.com/> in the same window.
+- **The YouTube window doesn't close after signing in**: that's expected; close it yourself once YouTube shows you logged in. If Google leaves you on an account page instead, open <https://www.youtube.com/> in the same window first.
+- **"The browser was closed before the YouTube login finished"**: no YouTube login was found in the window's profile. Make sure YouTube itself (not only Google's account page) showed you logged in before closing the window, and try again.
+- **Google says "This browser or app may not be secure"**: Google refused the login window. Try another browser with the [`browser` setting](#which-browser-is-used), or [import the login from your own browser](#importing-a-youtube-login-from-your-browser).
+- **"... holds no YouTube login"** (with `--cookies`): the file has no unexpired `SAPISID` cookie for youtube.com. Export it again while logged in to youtube.com, in the Netscape `cookies.txt` format.
 - **"Spotify is rate-limiting this login's requests"**: Spotify refused the request with `429`. Short waits (up to a minute) are retried automatically with a message for each wait. If Spotify asks for a longer wait, Spotarchive stops right away and says how long. The login is still saved, so run Spotarchive again later without logging in again.
 - **"Spotify's web player no longer accepts the ... query"**: Spotify changed its web player in a way this version of Spotarchive doesn't handle; update Spotarchive. See [where the data comes from](fetching.md#where-the-data-comes-from).
 - **"Can't read the session file"**: the file is damaged; delete `data/session.json` and log in again. Your playlist selection will need to be made again too.
