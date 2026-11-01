@@ -147,3 +147,31 @@ def test_installed_browsers_on_linux(tmp_path, monkeypatch):
     monkeypatch.setattr(auth.os, "name", "posix")
     monkeypatch.setattr(auth.shutil, "which", lambda name: str(chrome) if name == "google-chrome" else None)
     assert installed_browsers() == [chrome]
+
+
+class _FakePlaywright:
+    class chromium:
+        executable_path = "/nonexistent/chromium"
+
+
+def test_named_browser_is_used_or_reported_missing(tmp_path, monkeypatch):
+    brave = tmp_path / "brave-browser"
+    brave.write_text("")
+    monkeypatch.setattr(auth.os, "name", "posix")
+    monkeypatch.setattr(auth.shutil, "which", lambda name: str(brave) if name == "brave-browser" else None)
+    assert auth._login_browser(_FakePlaywright, "Brave") == brave
+    with pytest.raises(auth.BrowserUnavailable, match="edge"):
+        auth._login_browser(_FakePlaywright, "edge")
+    with pytest.raises(auth.BrowserUnavailable, match="Unknown"):
+        auth._login_browser(_FakePlaywright, "netscape")
+
+
+def test_flatpak_browser_is_found_and_launched(tmp_path, monkeypatch):
+    monkeypatch.setattr(auth.os, "name", "posix")
+    monkeypatch.setattr(auth.shutil, "which", lambda name: None)
+    monkeypatch.setattr(auth, "flatpak_installed", lambda app_id: app_id == "com.brave.Browser")
+    found = auth._login_browser(_FakePlaywright, "brave")
+    assert found == "flatpak:com.brave.Browser"
+    cmd = auth.login_browser_command(found, tmp_path / "profile", "https://example.com")
+    assert cmd[:4] == ["flatpak", "run", f"--filesystem={tmp_path / 'profile'}", "com.brave.Browser"]
+    assert f"--user-data-dir={tmp_path / 'profile'}" in cmd
