@@ -147,3 +147,20 @@ def test_installed_browsers_on_linux(tmp_path, monkeypatch):
     monkeypatch.setattr(auth.os, "name", "posix")
     monkeypatch.setattr(auth.shutil, "which", lambda name: str(chrome) if name == "google-chrome" else None)
     assert installed_browsers() == [chrome]
+
+
+class _FakePlaywright:
+    class chromium:
+        executable_path = "/nonexistent/chromium"
+
+
+def test_named_browser_is_used_or_reported_missing(tmp_path, monkeypatch):
+    brave = tmp_path / "brave-browser"
+    brave.write_text("")
+    monkeypatch.setattr(auth.os, "name", "posix")
+    monkeypatch.setattr(auth.shutil, "which", lambda name: str(brave) if name == "brave-browser" else None)
+    assert auth._login_browser(_FakePlaywright, "Brave") == brave
+    with pytest.raises(auth.BrowserUnavailable, match="edge"):
+        auth._login_browser(_FakePlaywright, "edge")
+    with pytest.raises(auth.BrowserUnavailable, match="Unknown"):
+        auth._login_browser(_FakePlaywright, "netscape")

@@ -26,6 +26,8 @@ For the login window, Spotarchive uses the first of these it finds:
 2. Microsoft Edge (preinstalled on Windows)
 3. Playwright's bundled Chromium (`python -m playwright install chromium`)
 
+To use another browser, set `browser` in the `[login]` table of [`spotarchive.toml`](configuration.md#login) to `"chrome"`, `"edge"`, `"brave"`, `"vivaldi"`, `"opera"` or `"chromium"`. Any Chromium-based browser works; Firefox does not. If the chosen browser isn't installed, the login stops with an error instead of falling back.
+
 Getting the first access token after logging in and [refreshing tokens](#how-tokens-are-refreshed) happen in a hidden (headless) browser started through [Playwright](https://playwright.dev/python/). Token refreshes try Playwright's bundled Chromium, then Chrome, then Edge; if none of them can be started, the error message lists why each one failed.
 
 ## What is stored

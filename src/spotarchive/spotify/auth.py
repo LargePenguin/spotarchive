@@ -76,6 +76,22 @@ LINUX_BROWSERS = ("google-chrome", "google-chrome-stable", "microsoft-edge", "mi
 WINDOWS_BROWSERS = ("Google/Chrome/Application/chrome.exe", "Microsoft/Edge/Application/msedge.exe")
 WINDOWS_ROOTS = ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")
 
+# Browsers the user can pick for the login window (config: [login] browser):
+# name -> (executable names on PATH on Linux, paths below WINDOWS_ROOTS).
+# "chromium" also accepts Playwright's bundled Chromium.
+NAMED_BROWSERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "chrome": (("google-chrome", "google-chrome-stable", "chrome"), ("Google/Chrome/Application/chrome.exe",)),
+    "edge": (("microsoft-edge", "microsoft-edge-stable"), ("Microsoft/Edge/Application/msedge.exe",)),
+    "brave": (
+        ("brave-browser", "brave-browser-stable", "brave"),
+        ("BraveSoftware/Brave-Browser/Application/brave.exe",),
+    ),
+    "vivaldi": (("vivaldi", "vivaldi-stable"), ("Vivaldi/Application/vivaldi.exe",)),
+    "opera": (("opera",), ("Programs/Opera/opera.exe", "Opera/opera.exe")),
+    "chromium": (("chromium", "chromium-browser"), ("Chromium/Application/chrome.exe",)),
+}
+BROWSER_ALIASES = {"google-chrome": "chrome", "msedge": "edge", "microsoft-edge": "edge", "brave-browser": "brave"}
+
 
 class AuthError(Exception):
     """Base class for login problems."""
@@ -237,9 +253,40 @@ def installed_browsers() -> list[Path]:
     return [path for path in found if path.is_file()]
 
 
-def _login_browser(playwright) -> Path:
-    candidates = installed_browsers()
+def canonical_browser(name: str) -> str | None:
+    """The key in NAMED_BROWSERS for a user-given name (case-insensitive), or None if unknown."""
+    key = name.strip().lower()
+    key = BROWSER_ALIASES.get(key, key)
+    return key if key in NAMED_BROWSERS else None
+
+
+def named_browser(name: str) -> list[Path]:
+    """Executables of the browser called *name* (a NAMED_BROWSERS key) installed on this computer."""
+    linux_names, windows_paths = NAMED_BROWSERS[name]
+    if os.name == "nt":
+        roots = [os.environ.get(var) for var in WINDOWS_ROOTS]
+        found = [Path(root) / rel for rel in windows_paths for root in roots if root]
+    else:
+        found = [Path(path) for exe in linux_names if (path := shutil.which(exe))]
+    return [path for path in found if path.is_file()]
+
+
+def _login_browser(playwright, browser: str | None = None) -> Path:
     bundled = Path(playwright.chromium.executable_path)
+    if browser:
+        key = canonical_browser(browser)
+        if key is None:
+            raise BrowserUnavailable(f"Unknown browser {browser!r}; choose one of: {', '.join(NAMED_BROWSERS)}.")
+        candidates = named_browser(key)
+        if key == "chromium" and bundled.is_file():
+            candidates.append(bundled)
+        if not candidates:
+            raise BrowserUnavailable(
+                f"Couldn't find {key} on this computer (login.browser in the configuration file). "
+                "Install it, or leave the setting empty to use whichever supported browser is found."
+            )
+        return candidates[0]
+    candidates = installed_browsers()
     if bundled.is_file():
         candidates.append(bundled)
     if not candidates:
@@ -408,6 +455,7 @@ def interactive_login(
     on_status: Callable[[str], None] = lambda msg: None,
     open_browser: Callable[[Path, Path, str], LoginWindow] = open_login_browser,
     configure_context: Callable[[object], None] | None = None,
+    browser: str | None = None,
 ) -> SpotifySession:
     """Let the user log in in a normal browser window, then capture the session.
 
@@ -415,7 +463,8 @@ def interactive_login(
     with Spotify's login cookie set; the cookies and user agent are read from
     the running window, which is then closed. The window uses *profile_dir*
     as its profile, which is kept so Spotify recognises the device on later
-    logins. *open_browser* and *configure_context* (passed on to
+    logins. *browser* names the browser to use (see NAMED_BROWSERS); by default
+    the first installed Chrome, Edge or Playwright's Chromium. *open_browser* and *configure_context* (passed on to
     :func:`refresh_session`, e.g. to route requests to fakes) exist for tests.
     """
     from playwright.sync_api import Error as PlaywrightError
@@ -424,7 +473,7 @@ def interactive_login(
     profile_dir = Path(profile_dir).resolve()
     _prepare_profile(profile_dir)
     with sync_playwright() as p:
-        executable = _login_browser(p)
+        executable = _login_browser(p, browser)
         window = open_browser(executable, profile_dir, LOGIN_URL)
         on_status(
             "Log in to Spotify in the browser window that just opened; "
