@@ -24,10 +24,15 @@ from spotarchive.spotify.auth import (
     interactive_login,
 )
 from spotarchive.spotify.client import QueryOutdated, RateLimited, SpotifyApiError, SpotifyClient
+from spotarchive.youtube import auth as youtube_auth
 
-
-# Profile of the login browser window, next to session.json.
+# Profiles of the login browser windows, next to session.json.
 BROWSER_PROFILE_DIRNAME = "browser-profile"
+YOUTUBE_PROFILE_DIRNAME = "browser-profile-youtube"
+LOGIN_SITES = ("spotify", "youtube")
+YOUTUBE_LOGIN_HINT = "You can log in to YouTube any time with `spotarchive -l youtube`."
+# The tests replace this.
+youtube_login = youtube_auth.interactive_login
 
 
 class CliError(Exception):
@@ -42,9 +47,19 @@ def build_parser() -> argparse.ArgumentParser:
             "setlist.csv files, then source the songs legally through a download "
             "backend. No audio is ever taken from Spotify."
         ),
-        epilog="With no options: check for updates, log in if needed, fetch, download, then fix the metadata.",
+        epilog=(
+            "With no options: check for updates, log in if needed (offering the optional YouTube "
+            "login), fetch, download, then fix the metadata."
+        ),
     )
-    parser.add_argument("-l", "--login", action="store_true", help="log in to Spotify in a browser window")
+    parser.add_argument(
+        "-l", "--login", nargs="?", const=True, metavar="SITE",
+        help="log in to SITE (spotify or youtube) in a browser window; asks which without SITE",
+    )
+    parser.add_argument(
+        "--cookies", type=Path, metavar="FILE",
+        help="with --login youtube: import the login from a cookies.txt exported from your browser instead",
+    )
     parser.add_argument("-f", "--fetch", action="store_true", help="choose playlists and rebuild their setlist.csv files")
     parser.add_argument(
         "-n", "--noselect", action="store_true",
@@ -96,7 +111,35 @@ def _duration(seconds: float) -> str:
     return f"about {round(minutes / 60)} hours"
 
 
-def run_login(store: SessionStore, browser: str = "") -> None:
+def run_login(store: SessionStore, site: str | bool, browser: str = "", cookies: Path | None = None) -> None:
+    """``--login [SITE]``: log in to *site*, or ask which (``True``).
+
+    With *cookies* (``--cookies``) the YouTube login comes from that file.
+    """
+    if cookies is not None:
+        import_youtube_cookies(store, cookies)
+        return
+    if site is True:
+        site = choose_login_site()
+    if site == "youtube":
+        run_youtube_login(store, browser)
+    else:
+        run_spotify_login(store, browser)
+
+
+def choose_login_site() -> str:
+    if not ui.can_prompt():
+        raise CliError("Say which site to log in to: `spotarchive -l spotify` or `spotarchive -l youtube`.")
+    site = ui.choose_one(
+        "Which site do you want to log in to?",
+        [("Spotify", "spotify"), ("YouTube", "youtube")],
+    )
+    if site is None:
+        raise KeyboardInterrupt
+    return site
+
+
+def run_spotify_login(store: SessionStore, browser: str = "") -> None:
     ui.info("Opening a browser for the Spotify login...")
     store.spotify = interactive_login(
         store.path.parent / BROWSER_PROFILE_DIRNAME, on_status=ui.info, browser=browser or None
@@ -110,10 +153,57 @@ def run_login(store: SessionStore, browser: str = "") -> None:
     ui.ok(f"Logged in to Spotify as {store.spotify.display_name}.")
 
 
+def run_youtube_login(store: SessionStore, browser: str = "") -> None:
+    ui.info("Opening a browser for the YouTube login...")
+    store.youtube = youtube_login(
+        store.path.parent / YOUTUBE_PROFILE_DIRNAME, on_status=ui.info, browser=browser or None
+    )
+    # Someone who logged in wants to hear about it when the login expires.
+    store.offer_youtube_login = True
+    store.save()
+    ui.ok("Logged in to YouTube; age-restricted songs can be downloaded now.")
+
+
+def import_youtube_cookies(store: SessionStore, path: Path) -> None:
+    store.youtube = youtube_auth.import_cookies(path)
+    store.offer_youtube_login = True
+    store.save()
+    ui.ok(f"Imported the YouTube login ({len(store.youtube.cookies)} youtube.com cookies).")
+    ui.warn(f"{path} still holds your login; delete it unless you need it.")
+
+
+def offer_youtube_login(store: SessionStore, browser: str = "") -> None:
+    """Plain runs: offer the optional YouTube login when there's no working one.
+
+    A failed YouTube login doesn't stop the run; downloads go on without it.
+    """
+    if youtube_auth.is_logged_in(store.youtube) or not store.offer_youtube_login or not ui.can_prompt():
+        return
+    if store.youtube is not None:
+        ui.warn("The saved YouTube login has expired.")
+    answer = ui.choose_one(
+        "Log in to YouTube too? Some age-restricted songs only download with a login.",
+        [("Yes, log in now", "yes"), ("No, not now", "no"), ("No, and don't ask again", "never")],
+        instruction="(arrow keys: move, enter: confirm; `spotarchive -l youtube` logs in any time)",
+    )
+    if answer is None:
+        raise KeyboardInterrupt
+    if answer == "never":
+        store.offer_youtube_login = False
+        store.save()
+    if answer != "yes":
+        ui.info(YOUTUBE_LOGIN_HINT)
+        return
+    try:
+        run_youtube_login(store, browser)
+    except AuthError as exc:
+        ui.warn(f"The YouTube login didn't work ({exc}); continuing without it. {YOUTUBE_LOGIN_HINT}")
+
+
 def ensure_login(store: SessionStore, browser: str = "") -> None:
     """Run the login helper unless the saved login still works."""
     if store.spotify is None:
-        run_login(store, browser)
+        run_spotify_login(store, browser)
         return
     try:
         make_client(store).current_user()
@@ -122,7 +212,7 @@ def ensure_login(store: SessionStore, browser: str = "") -> None:
         raise
     except (AuthError, SpotifyApiError) as exc:
         ui.warn(f"The saved Spotify login doesn't work ({exc}).")
-        run_login(store, browser)
+        run_spotify_login(store, browser)
 
 
 def run_fetch(store: SessionStore, data_dir: Path, noselect: bool) -> None:
@@ -185,6 +275,13 @@ def run_download(store: SessionStore, data_dir: Path, settings: Config) -> None:
     backend.check()
     for warning in backend.warnings():
         ui.warn(warning)
+    if youtube_auth.is_logged_in(store.youtube):
+        backend.use_youtube_login(store.youtube)
+    elif store.youtube is not None:
+        ui.warn(
+            "The saved YouTube login has expired, so age-restricted songs may fail; "
+            "run `spotarchive -l youtube` to log in again."
+        )
 
     failed_songs = unfetched = 0
     for name, folder in folders:
@@ -381,6 +478,15 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
     """Run the CLI; *data_dir* overrides the configured data folder (for tests)."""
     parser = build_parser()
     args = parser.parse_args(argv)
+    if isinstance(args.login, str):
+        args.login = args.login.lower()
+        if args.login not in LOGIN_SITES:
+            parser.error(f"unknown login site {args.login!r}: use `-l spotify` or `-l youtube`")
+    if args.cookies is not None:
+        if args.login is True:
+            args.login = "youtube"
+        if args.login != "youtube":
+            parser.error("--cookies only works together with --login youtube")
     if args.noselect and not args.fetch:
         parser.error("--noselect only works together with --fetch (e.g. -fn)")
     if args.update and (args.login or args.fetch or args.download or args.meta):
@@ -397,9 +503,10 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
         data_dir = settings.data_dir if data_dir is None else data_dir
         store = SessionStore.load(data_dir)
         if args.login:
-            run_login(store, settings.login_browser)
+            run_login(store, args.login, settings.login_browser, args.cookies)
         if plain:
             ensure_login(store, settings.login_browser)
+            offer_youtube_login(store, settings.login_browser)
             run_fetch(store, data_dir, noselect=False)
             # With nothing selected, fetching has already said so.
             if not selected_folders(store, data_dir):
@@ -429,7 +536,7 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
         ui.warn("Cancelled.")
         return 130
     except LoginRequired as exc:
-        ui.error(f"{exc} Run `spotarchive --login` to log in.")
+        ui.error(f"{exc} Run `spotarchive --login spotify` to log in.")
         return 1
     except RateLimited as exc:
         ui.error(rate_limit_message(exc))

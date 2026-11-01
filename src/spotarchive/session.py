@@ -1,7 +1,8 @@
 """The session file at the root of the data folder.
 
 It holds the captured Spotify login (cookies, user agent, cached access
-token) and the user's playlist selections. It contains credentials, so it is
+token), the optional YouTube login (cookies, user agent) and the user's
+playlist selections. It contains credentials, so it is
 written with owner-only permissions where the platform supports it.
 """
 
@@ -49,6 +50,34 @@ class SpotifySession:
 
 
 @dataclass
+class YouTubeSession:
+    """A YouTube login, handed to download backends that can use it."""
+
+    # youtube.com cookies in Playwright's format (name, value, domain, path,
+    # expires in seconds since the epoch or -1, httpOnly, secure, ...).
+    cookies: list[dict]
+    user_agent: str
+    logged_in_at_ms: int = 0
+
+    def netscape_cookies(self) -> str:
+        """The cookies as a Netscape ``cookies.txt`` file, as yt-dlp's ``--cookies`` reads it."""
+        lines = ["# Netscape HTTP Cookie File", "# Written by spotarchive; do not share.", ""]
+        for c in self.cookies:
+            domain = c.get("domain", "")
+            expires = c.get("expires", -1)
+            lines.append("\t".join([
+                domain,
+                "TRUE" if domain.startswith(".") else "FALSE",
+                c.get("path") or "/",
+                "TRUE" if c.get("secure") else "FALSE",
+                str(int(expires)) if expires and expires > 0 else "0",
+                c.get("name", ""),
+                c.get("value", ""),
+            ]))
+        return "\n".join(lines) + "\n"
+
+
+@dataclass
 class PlaylistState:
     name: str
     selected: bool = False
@@ -61,6 +90,9 @@ class PlaylistState:
 class SessionStore:
     path: Path
     spotify: SpotifySession | None = None
+    youtube: YouTubeSession | None = None
+    # False once the user said "don't ask again" to the YouTube login offer.
+    offer_youtube_login: bool = True
     playlists: dict[str, PlaylistState] = field(default_factory=dict)
 
     @classmethod
@@ -71,9 +103,12 @@ class SessionStore:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
             spotify = raw.get("spotify")
+            youtube = raw.get("youtube")
             return cls(
                 path=path,
                 spotify=SpotifySession(**spotify) if spotify else None,
+                youtube=YouTubeSession(**youtube) if youtube else None,
+                offer_youtube_login=bool(raw.get("offer_youtube_login", True)),
                 playlists={
                     pid: PlaylistState(**state)
                     for pid, state in raw.get("playlists", {}).items()
@@ -93,6 +128,8 @@ class SessionStore:
         data = {
             "version": SESSION_VERSION,
             "spotify": asdict(self.spotify) if self.spotify else None,
+            "youtube": asdict(self.youtube) if self.youtube else None,
+            "offer_youtube_login": self.offer_youtube_login,
             "playlists": {pid: asdict(s) for pid, s in self.playlists.items()},
         }
         _write_private(self.path, json.dumps(data, indent=2, ensure_ascii=False))

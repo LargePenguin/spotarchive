@@ -40,7 +40,7 @@ Moving `data_dir` doesn't move existing files: move the old folder's contents yo
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `browser` | `""` | Browser for the [login window](authentication.md#which-browser-is-used): `"chrome"`, `"edge"`, `"brave"`, `"vivaldi"`, `"opera"` or `"chromium"` (case-insensitive). Empty: the first of Chrome, Edge and Playwright's bundled Chromium that is found. A named browser that isn't installed is an error, with no fallback. |
+| `browser` | `""` | Browser for the [login windows](authentication.md#which-browser-is-used) (Spotify and YouTube): `"chrome"`, `"edge"`, `"brave"`, `"vivaldi"`, `"opera"` or `"chromium"` (case-insensitive). Empty: the first of Chrome, Edge and Playwright's bundled Chromium that is found. A named browser that isn't installed is an error, with no fallback. |
 
 ### `[download]`
 

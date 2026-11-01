@@ -95,7 +95,7 @@ def parse(raw: dict, path: Path) -> Config:
             raise fail("login.browser must be a string")
         browser = login["browser"].strip().lower()
         if browser:
-            from spotarchive.spotify.auth import NAMED_BROWSERS, canonical_browser
+            from spotarchive.browser import NAMED_BROWSERS, canonical_browser
 
             key = canonical_browser(browser)
             if key is None:

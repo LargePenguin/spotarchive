@@ -1,21 +1,15 @@
 """Browser-based Spotify login.
 
 Spotarchive never asks for your password. It opens a normal browser window
-at Spotify's login page, with a profile of its own. Once Spotify redirects the
-window to the web player, it reads from the running window:
+at Spotify's login page, with a profile of its own (see
+:mod:`spotarchive.browser`). Once Spotify redirects the window to the web
+player, it reads from the running window:
 
 * the spotify.com cookies (``sp_dc`` is the long-lived login cookie) and
 * the browser's user agent,
 
 then closes the window and has a headless browser load the web player with
 those cookies to get the short-lived access token it fetches for itself.
-
-The login window is started as a plain process, not driven by Playwright: an
-automated browser (``navigator.webdriver``, a throwaway profile, a debugger
-attached to the page) gets stuck in endless captchas on Spotify's login page.
-While the user logs in, spotarchive only polls the window's DevTools HTTP
-endpoint for the URLs of its tabs; it connects over DevTools once the window
-has reached the web player.
 
 The same headless step runs again whenever the token expires, so the web
 player hands out a fresh one. Letting the real web player mint the
@@ -26,18 +20,30 @@ The same page load also yields the hashes of the web player's API queries
 
 from __future__ import annotations
 
-import json
-import os
 import re
-import shutil
-import subprocess
 import time
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
 from urllib.parse import urlparse
 
+from spotarchive.browser import (  # noqa: F401  (re-exported)
+    LOGIN_TIMEOUT_S,
+    NAMED_BROWSERS,
+    POLL_MS,
+    AuthError,
+    BrowserUnavailable,
+    LoginCancelled,
+    LoginSite,
+    LoginWindow,
+    canonical_browser,
+    capture_login,
+    installed_browsers,
+    login_browser_command,
+    normalize_user_agent,
+    open_login_browser,
+    read_debug_port,
+)
 from spotarchive.session import SessionStore, SpotifySession
 
 LOGIN_URL = "https://accounts.spotify.com/login?continue=https%3A%2F%2Fopen.spotify.com%2F"
@@ -49,18 +55,10 @@ TOKEN_PATHS = ("/api/token", "/get_access_token")
 WEB_PLAYER_SCRIPT_RE = re.compile(r"/web-player\.[0-9a-f]+\.js$")
 QUERY_HASH_RE = re.compile(r'"(\w+)","query","([0-9a-f]{64})"')
 
-LOGIN_TIMEOUT_S = 600
-# How long a window on the web player may lack the login cookie before it
-# counts as not logged in (yet).
-LOGIN_COOKIE_WAIT_S = 3
-CLOSE_TIMEOUT_S = 10
 REFRESH_TIMEOUT_S = 60
 # How long an anonymous token may stand alone before the cookies are
 # considered logged out.
 ANONYMOUS_GRACE_S = 5
-POLL_MS = 500
-# Where Chromium writes the DevTools port it picked for --remote-debugging-port=0.
-DEBUG_PORT_FILE = "DevToolsActivePort"
 
 # Browsers to try for headless token refreshes, in order: Playwright's
 # bundled Chromium, then installed Chrome and Edge (always present on Windows).
@@ -70,54 +68,9 @@ BROWSER_CHANNELS = (None, "chrome", "msedge")
 STEALTH_ARGS = ["--disable-blink-features=AutomationControlled"]
 STEALTH_IGNORED_DEFAULTS = ["--enable-automation"]
 
-# Installed browsers preferred for the login window, before Playwright's
-# bundled Chromium.
-LINUX_BROWSERS = ("google-chrome", "google-chrome-stable", "microsoft-edge", "microsoft-edge-stable")
-WINDOWS_BROWSERS = ("Google/Chrome/Application/chrome.exe", "Microsoft/Edge/Application/msedge.exe")
-WINDOWS_ROOTS = ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")
-
-# Browsers the user can pick for the login window (config: [login] browser):
-# name -> (executable names on PATH on Linux, paths below WINDOWS_ROOTS).
-# "chromium" also accepts Playwright's bundled Chromium.
-NAMED_BROWSERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
-    "chrome": (("google-chrome", "google-chrome-stable", "chrome"), ("Google/Chrome/Application/chrome.exe",)),
-    "edge": (("microsoft-edge", "microsoft-edge-stable"), ("Microsoft/Edge/Application/msedge.exe",)),
-    "brave": (
-        ("brave-browser", "brave-browser-stable", "brave"),
-        ("BraveSoftware/Brave-Browser/Application/brave.exe",),
-    ),
-    "vivaldi": (("vivaldi", "vivaldi-stable"), ("Vivaldi/Application/vivaldi.exe",)),
-    "opera": (("opera",), ("Programs/Opera/opera.exe", "Opera/opera.exe")),
-    "chromium": (("chromium", "chromium-browser"), ("Chromium/Application/chrome.exe",)),
-}
-# Flatpak app IDs of the same browsers (Linux), used when no executable is on PATH.
-FLATPAK_BROWSERS = {
-    "chrome": "com.google.Chrome",
-    "edge": "com.microsoft.Edge",
-    "brave": "com.brave.Browser",
-    "vivaldi": "com.vivaldi.Vivaldi",
-    "opera": "com.opera.Opera",
-    "chromium": "org.chromium.Chromium",
-}
-FLATPAK_PREFIX = "flatpak:"
-BROWSER_ALIASES = {"google-chrome": "chrome", "msedge": "edge", "microsoft-edge": "edge", "brave-browser": "brave"}
-
-
-class AuthError(Exception):
-    """Base class for login problems."""
-
 
 class LoginRequired(AuthError):
     """There is no usable Spotify login; run the login helper."""
-
-
-class LoginCancelled(AuthError):
-    """The user closed the browser before finishing the login."""
-
-
-class BrowserUnavailable(AuthError):
-    """No browser Playwright can drive is installed."""
-
 
 class TokenProvider(Protocol):
     def get_token(self, force_refresh: bool = False) -> str: ...
@@ -166,12 +119,6 @@ def spotify_cookies(cookies: list[dict]) -> list[dict]:
 
 def has_login_cookie(cookies: list[dict]) -> bool:
     return any(c.get("name") == LOGIN_COOKIE and c.get("value") for c in cookies)
-
-
-def normalize_user_agent(user_agent: str) -> str:
-    # Headless Chromium advertises itself; look like the browser the user
-    # logged in with instead.
-    return user_agent.replace("HeadlessChrome", "Chrome")
 
 
 def _launch(playwright, headless: bool):
@@ -253,229 +200,17 @@ def _web_player_token(context, timeout_s: int) -> tuple[TokenInfo | None, dict[s
     raise AuthError("Timed out waiting for Spotify to issue a token.")
 
 
-def installed_browsers() -> list[Path]:
-    """Chrome and Edge executables installed on this computer."""
-    if os.name == "nt":
-        roots = [os.environ.get(var) for var in WINDOWS_ROOTS]
-        found = [Path(root) / rel for rel in WINDOWS_BROWSERS for root in roots if root]
-    else:
-        found = [Path(path) for name in LINUX_BROWSERS if (path := shutil.which(name))]
-    return [path for path in found if path.is_file()]
-
-
-def canonical_browser(name: str) -> str | None:
-    """The key in NAMED_BROWSERS for a user-given name (case-insensitive), or None if unknown."""
-    key = name.strip().lower()
-    key = BROWSER_ALIASES.get(key, key)
-    return key if key in NAMED_BROWSERS else None
-
-
-def named_browser(name: str) -> list[Path]:
-    """Executables of the browser called *name* (a NAMED_BROWSERS key) installed on this computer."""
-    linux_names, windows_paths = NAMED_BROWSERS[name]
-    if os.name == "nt":
-        roots = [os.environ.get(var) for var in WINDOWS_ROOTS]
-        found = [Path(root) / rel for rel in windows_paths for root in roots if root]
-    else:
-        found = [Path(path) for exe in linux_names if (path := shutil.which(exe))]
-    return [path for path in found if path.is_file()]
-
-
-def flatpak_installed(app_id: str) -> bool:
-    """Whether the Flatpak app *app_id* is installed (Linux only)."""
-    if os.name == "nt" or not shutil.which("flatpak"):
-        return False
-    try:
-        return subprocess.run(
-            ["flatpak", "info", app_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30
-        ).returncode == 0
-    except (OSError, subprocess.SubprocessError):
-        return False
-
-
-def _login_browser(playwright, browser: str | None = None) -> Path | str:
-    bundled = Path(playwright.chromium.executable_path)
-    if browser:
-        key = canonical_browser(browser)
-        if key is None:
-            raise BrowserUnavailable(f"Unknown browser {browser!r}; choose one of: {', '.join(NAMED_BROWSERS)}.")
-        candidates: list[Path | str] = list(named_browser(key))
-        if not candidates and flatpak_installed(FLATPAK_BROWSERS[key]):
-            candidates.append(FLATPAK_PREFIX + FLATPAK_BROWSERS[key])
-        if key == "chromium" and bundled.is_file():
-            candidates.append(bundled)
-        if not candidates:
-            raise BrowserUnavailable(
-                f"Couldn't find {key} on this computer (login.browser in the configuration file). "
-                "Install it, or leave the setting empty to use whichever supported browser is found."
-            )
-        return candidates[0]
-    candidates = installed_browsers()
-    if bundled.is_file():
-        candidates.append(bundled)
-    if not candidates:
-        raise BrowserUnavailable(
-            "Couldn't find a browser. Install Google Chrome or Microsoft Edge, "
-            "or Playwright's Chromium with `python -m playwright install chromium`."
-        )
-    return candidates[0]
-
-
-def login_browser_command(executable: Path | str, profile_dir: Path, url: str) -> list[str]:
-    """A plain (not automated) browser window on its own profile.
-
-    The DevTools port (picked by the browser, see :func:`read_debug_port`)
-    only lets spotarchive see which page the window is on; nothing attaches
-    to the page while the user logs in.
-    """
-    if str(executable).startswith(FLATPAK_PREFIX):
-        # The sandbox needs access to the profile folder (it holds the port file).
-        launcher = ["flatpak", "run", f"--filesystem={profile_dir}", str(executable)[len(FLATPAK_PREFIX):]]
-    else:
-        launcher = [str(executable)]
-    return [
-        *launcher,
-        f"--user-data-dir={profile_dir}",
-        "--remote-debugging-port=0",
-        # No --disable-blink-features=AutomationControlled here: current Chrome
-        # no longer supports it and shows a warning banner in the window.
-        "--no-first-run",
-        "--no-default-browser-check",
-        # Keep the profile's cookies out of the system keyring (no prompt).
-        "--password-store=basic",
-        "--use-mock-keychain",
-        "--new-window",
-        url,
-    ]
-
-
-def read_debug_port(profile_dir: Path) -> int | None:
-    """The DevTools port the browser on *profile_dir* listens on, once it's up."""
-    try:
-        first_line = (Path(profile_dir) / DEBUG_PORT_FILE).read_text().splitlines()[0]
-        return int(first_line)
-    except (OSError, IndexError, ValueError):
-        return None
-
-
-class LoginWindow(Protocol):
-    def is_open(self) -> bool: ...
-    def debug_port(self) -> int | None: ...
-    def close(self) -> None: ...
-
-
-class BrowserProcess:
-    """The login window, started as a plain browser process."""
-
-    def __init__(self, executable: Path | str, profile_dir: Path, url: str):
-        self.profile_dir = profile_dir
-        try:
-            self._process = subprocess.Popen(
-                login_browser_command(executable, profile_dir, url),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError as exc:
-            raise BrowserUnavailable(f"Couldn't start {executable}: {exc}") from exc
-
-    def is_open(self) -> bool:
-        return self._process.poll() is None
-
-    def debug_port(self) -> int | None:
-        return read_debug_port(self.profile_dir)
-
-    def close(self) -> None:
-        """Wait briefly for the browser to exit (it's asked to quit over
-        DevTools first, which saves its profile cleanly), then stop it."""
-        try:
-            self._process.wait(timeout=CLOSE_TIMEOUT_S)
-            return
-        except subprocess.TimeoutExpired:
-            self._process.terminate()
-        try:
-            self._process.wait(timeout=CLOSE_TIMEOUT_S)
-        except subprocess.TimeoutExpired:
-            self._process.kill()
-
-
-def open_login_browser(executable: Path | str, profile_dir: Path, url: str) -> LoginWindow:
-    return BrowserProcess(executable, profile_dir, url)
-
-
 def is_web_player_url(url: str) -> bool:
     return urlparse(url).hostname == "open.spotify.com"
 
 
-def _page_urls(port: int) -> list[str]:
-    """URLs of the window's tabs, from the DevTools HTTP endpoint.
-
-    This plain HTTP request doesn't attach a debugger to any page.
-    """
-    try:
-        with urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=2) as response:
-            targets = json.load(response)
-    except (OSError, ValueError):
-        return []
-    return [t.get("url", "") for t in targets if isinstance(t, dict) and t.get("type") == "page"]
-
-
-def _read_live_login(playwright, port: int) -> tuple[list[dict], str] | None:
-    """Read the login cookies and user agent from the running window.
-
-    Returns None (and leaves the window alone) when it holds no login yet.
-    On success the window is asked to quit.
-    """
-    browser = playwright.chromium.connect_over_cdp(f"http://127.0.0.1:{port}")
-    try:
-        cdp = browser.new_browser_cdp_session()
-        context = browser.contexts[0]
-        cookies: list[dict] = []
-        # Spotify sets sp_dc while logging in, but the redirect may win the race.
-        deadline = time.monotonic() + LOGIN_COOKIE_WAIT_S
-        while time.monotonic() < deadline:
-            cookies = spotify_cookies(context.cookies())
-            if has_login_cookie(cookies):
-                break
-            time.sleep(POLL_MS / 1000)
-        else:
-            return None
-        user_agent = cdp.send("Browser.getVersion")["userAgent"]
-        cdp.send("Browser.close")
-        return cookies, user_agent
-    finally:
-        try:
-            browser.close()  # only disconnects from a browser it didn't launch
-        except Exception:
-            pass
-
-
-def _wait_for_login(playwright, window: LoginWindow, timeout_s: int) -> tuple[list[dict], str]:
-    """Wait until the window lands on the web player with a login."""
-    deadline = time.monotonic() + timeout_s
-    was_on_player = False
-    while time.monotonic() < deadline:
-        if not window.is_open():
-            raise LoginCancelled("The browser was closed before the login finished.")
-        port = window.debug_port()
-        on_player = bool(port) and any(is_web_player_url(u) for u in _page_urls(port))
-        # Check once per arrival on the web player, so nothing attaches to the
-        # browser while the user is still on the login page.
-        if on_player and not was_on_player:
-            found = _read_live_login(playwright, port)
-            if found:
-                return found
-        was_on_player = on_player
-        time.sleep(POLL_MS / 1000)
-    raise LoginCancelled(f"The login didn't finish within {timeout_s // 60} minutes.")
-
-
-def _prepare_profile(profile_dir: Path) -> None:
-    profile_dir.mkdir(parents=True, exist_ok=True)
-    if os.name == "posix":
-        # The profile holds the login cookies.
-        os.chmod(profile_dir, 0o700)
-    # A port file left over from an earlier run would point at a dead browser.
-    (profile_dir / DEBUG_PORT_FILE).unlink(missing_ok=True)
+SPOTIFY = LoginSite(
+    name="Spotify",
+    login_url=LOGIN_URL,
+    is_logged_in_url=is_web_player_url,
+    keep_cookies=spotify_cookies,
+    has_login=has_login_cookie,
+)
 
 
 def interactive_login(
@@ -489,33 +224,12 @@ def interactive_login(
     """Let the user log in in a normal browser window, then capture the session.
 
     The login counts as done when the window is redirected to the web player
-    with Spotify's login cookie set; the cookies and user agent are read from
-    the running window, which is then closed. The window uses *profile_dir*
-    as its profile, which is kept so Spotify recognises the device on later
-    logins. *browser* names the browser to use (see NAMED_BROWSERS); by default
-    the first installed Chrome, Edge or Playwright's Chromium. *open_browser* and *configure_context* (passed on to
+    with Spotify's login cookie set; see :func:`spotarchive.browser.capture_login`,
+    which also explains *browser*.
+    *open_browser* and *configure_context* (passed on to
     :func:`refresh_session`, e.g. to route requests to fakes) exist for tests.
     """
-    from playwright.sync_api import Error as PlaywrightError
-    from playwright.sync_api import sync_playwright
-
-    profile_dir = Path(profile_dir).resolve()
-    _prepare_profile(profile_dir)
-    with sync_playwright() as p:
-        executable = _login_browser(p, browser)
-        on_status(f"Using {str(executable).removeprefix(FLATPAK_PREFIX)}" + (" (Flatpak)" if str(executable).startswith(FLATPAK_PREFIX) else ""))
-        window = open_browser(executable, profile_dir, LOGIN_URL)
-        on_status(
-            "Log in to Spotify in the browser window that just opened; "
-            "it closes by itself once you're logged in."
-        )
-        try:
-            cookies, user_agent = _wait_for_login(p, window, timeout_s)
-        except PlaywrightError as exc:
-            raise AuthError(f"Reading the login failed: {str(exc).splitlines()[0]}") from exc
-        finally:
-            window.close()
-
+    cookies, user_agent = capture_login(SPOTIFY, profile_dir, timeout_s, on_status, open_browser, browser)
     on_status("Logged in; getting an access token...")
     session = SpotifySession(cookies=cookies, user_agent=normalize_user_agent(user_agent))
     try:
