@@ -12,7 +12,7 @@
 # to repair or update an install.
 #
 # Options (also settable through the environment variables in brackets):
-#   --dir DIR      where to clone Spotarchive when not run from a clone
+#   --dir DIR      where to download Spotarchive when not run from a checkout
 #                  [SPOTARCHIVE_DIR, default ~/spotarchive]
 #   --bin-dir DIR  where to link the command [SPOTARCHIVE_BIN_DIR, default ~/.local/bin]
 #   --no-browser   don't install Playwright's Chromium (Chrome or Edge is used instead)
@@ -22,7 +22,7 @@
 #   -y, --yes      don't ask before linking the command or installing system packages
 set -euo pipefail
 
-REPO_URL="https://github.com/LargePenguin/spotarchive.git"
+ARCHIVE_URL="https://github.com/LargePenguin/spotarchive/archive/refs/heads/main.tar.gz"
 INSTALL_DIR="${SPOTARCHIVE_DIR:-$HOME/spotarchive}"
 BIN_DIR="${SPOTARCHIVE_BIN_DIR:-$HOME/.local/bin}"
 WITH_BROWSER=1
@@ -78,15 +78,24 @@ fi
 if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/pyproject.toml" ] && grep -q '^name = "spotarchive"' "$SCRIPT_DIR/pyproject.toml"; then
     PROJECT_DIR="$SCRIPT_DIR"
     step "Using the Spotarchive folder $PROJECT_DIR"
-elif [ -d "$INSTALL_DIR/.git" ]; then
-    PROJECT_DIR="$INSTALL_DIR"
-    step "Updating $PROJECT_DIR"
-    git -C "$PROJECT_DIR" pull --ff-only || warn "Couldn't update the clone; installing the version that's there."
 else
-    command -v git >/dev/null || die "git is needed to download Spotarchive. Install it with your package manager and run this again."
-    [ -e "$INSTALL_DIR" ] && die "$INSTALL_DIR already exists and isn't a Spotarchive clone. Pick another folder with --dir."
-    step "Downloading Spotarchive into $INSTALL_DIR"
-    git clone --depth 1 "$REPO_URL" "$INSTALL_DIR"
+    command -v tar >/dev/null || die "tar is needed to unpack Spotarchive. Install it with your package manager and run this again."
+    if [ -f "$INSTALL_DIR/pyproject.toml" ] && grep -q '^name = "spotarchive"' "$INSTALL_DIR/pyproject.toml"; then
+        step "Updating $INSTALL_DIR"
+    elif [ -e "$INSTALL_DIR" ] && [ -n "$(ls -A "$INSTALL_DIR" 2>/dev/null)" ]; then
+        die "$INSTALL_DIR already exists and isn't a Spotarchive folder. Pick another folder with --dir."
+    else
+        step "Downloading Spotarchive into $INSTALL_DIR"
+    fi
+    mkdir -p "$INSTALL_DIR"
+    # Files are written over the existing ones; settings, data and .venv aren't in the archive, so they stay.
+    if command -v curl >/dev/null; then
+        curl -fsSL "$ARCHIVE_URL" | tar -xz --strip-components=1 -C "$INSTALL_DIR"
+    elif command -v wget >/dev/null; then
+        wget -qO- "$ARCHIVE_URL" | tar -xz --strip-components=1 -C "$INSTALL_DIR"
+    else
+        die "curl or wget is needed to download Spotarchive. Install one with your package manager and run this again."
+    fi
     PROJECT_DIR="$INSTALL_DIR"
 fi
 
