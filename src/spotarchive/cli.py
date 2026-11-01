@@ -132,7 +132,7 @@ def choose_login_site() -> str:
         raise CliError("Say which site to log in to: `spotarchive -l spotify` or `spotarchive -l youtube`.")
     site = ui.choose_one(
         "Which site do you want to log in to?",
-        [("Spotify", "spotify"), ("YouTube (lets age-restricted songs download)", "youtube")],
+        [("Spotify", "spotify"), ("YouTube", "youtube")],
     )
     if site is None:
         raise KeyboardInterrupt
