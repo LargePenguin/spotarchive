@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from spotarchive import browser
 from spotarchive.session import SessionStore, SpotifySession
 from spotarchive.spotify import auth
 from spotarchive.spotify.auth import (
@@ -144,6 +145,6 @@ def test_login_browser_is_not_automated(tmp_path):
 def test_installed_browsers_on_linux(tmp_path, monkeypatch):
     chrome = tmp_path / "google-chrome"
     chrome.write_text("")
-    monkeypatch.setattr(auth.os, "name", "posix")
-    monkeypatch.setattr(auth.shutil, "which", lambda name: str(chrome) if name == "google-chrome" else None)
+    monkeypatch.setattr(browser.os, "name", "posix")
+    monkeypatch.setattr(browser.shutil, "which", lambda name: str(chrome) if name == "google-chrome" else None)
     assert installed_browsers() == [chrome]
