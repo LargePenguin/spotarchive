@@ -503,6 +503,7 @@ def interactive_login(
     _prepare_profile(profile_dir)
     with sync_playwright() as p:
         executable = _login_browser(p, browser)
+        on_status(f"Using {str(executable).removeprefix(FLATPAK_PREFIX)}" + (" (Flatpak)" if str(executable).startswith(FLATPAK_PREFIX) else ""))
         window = open_browser(executable, profile_dir, LOGIN_URL)
         on_status(
             "Log in to Spotify in the browser window that just opened; "
