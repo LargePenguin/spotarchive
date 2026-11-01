@@ -41,6 +41,18 @@ def confirm(question: str, default: bool = True) -> bool | None:
     return questionary.confirm(question, default=default).ask()
 
 
+def choose_one(question: str, choices: list[tuple[str, str]], instruction: str | None = None) -> str | None:
+    """List prompt like the playlist checkboxes, but picking one of *choices*
+    (``(title, value)`` pairs); returns the value, or ``None`` if cancelled."""
+    import questionary
+
+    return questionary.select(
+        question,
+        choices=[questionary.Choice(title=title, value=value) for title, value in choices],
+        instruction=instruction or "(arrow keys: move, enter: confirm)",
+    ).ask()
+
+
 def choose_playlists(playlists: list[Playlist], preselected: list[str]) -> list[str] | None:
     """Checkbox prompt; returns the chosen IDs, or ``None`` if cancelled."""
     import questionary

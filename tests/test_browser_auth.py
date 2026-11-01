@@ -1,4 +1,4 @@
-"""Drive the real browser code against a fake Spotify.
+"""Drive the real browser code against a fake Spotify and a fake YouTube.
 
 Every request the browser makes is answered by the fakes below (anything
 else is aborted), so nothing reaches Spotify. Skipped when no browser
@@ -23,6 +23,7 @@ from spotarchive.spotify.auth import (  # noqa: E402
     read_debug_port,
     refresh_session,
 )
+from spotarchive.youtube import auth as youtube_auth  # noqa: E402
 
 GOOD_COOKIE = "dummy-cookie"
 
@@ -68,6 +69,47 @@ def fake_spotify(context):
     context.route("**/*", handle)
 
 
+# YouTube's sign-in handler sets the youtube.com login cookies, then opens the
+# home page.
+YOUTUBE_SIGNIN = f"""<html><body>Signing in<script>
+document.cookie = "SAPISID={GOOD_COOKIE}; domain=.youtube.com; path=/; secure; max-age=3600";
+location.href = "https://www.youtube.com/";
+</script></body></html>"""
+
+
+def fake_youtube(context):
+    def handle(route):
+        url = urlparse(route.request.url)
+        if url.hostname == "accounts.google.com":
+            route.fulfill(status=200, content_type="text/html", body="<html><body>Fake Google</body></html>")
+        elif url.hostname == "www.youtube.com" and url.path == "/signin":
+            route.fulfill(status=200, content_type="text/html", body=YOUTUBE_SIGNIN)
+        elif url.hostname == "www.youtube.com":
+            route.fulfill(status=200, content_type="text/html", body="<html><body>Fake YouTube</body></html>")
+        else:
+            route.abort()
+
+    context.route("**/*", handle)
+
+
+def spotify_user(log_in, reach_player):
+    def steps(page, url):
+        if log_in:
+            # The fake login page sets the login cookie as it loads.
+            page.goto(url)
+            page.wait_for_function("document.cookie.includes('sp_dc=')")
+        if log_in or reach_player:
+            page.goto("https://open.spotify.com/")
+    return steps
+
+
+def youtube_user(page, url):
+    page.goto(url)
+    # Google sends the window on to YouTube's sign-in handler.
+    page.goto("https://www.youtube.com/signin?action_handle_signin=true")
+    page.wait_for_url("https://www.youtube.com/")
+
+
 @pytest.fixture(scope="module", autouse=True)
 def require_browser():
     from playwright.sync_api import sync_playwright
@@ -85,21 +127,21 @@ def cookie(value):
 
 class FakeWindow:
     """Stands in for the login window: a headless browser with a DevTools
-    port, where a fake user logs in or not (*reach_player* without *log_in*
-    opens the web player logged out), then closes the window unless
-    spotarchive closes it first."""
+    port on the *site* fakes, where a fake user goes through *steps* (logging
+    in or not), then lingers and closes the window unless spotarchive closes
+    it first."""
 
-    def __init__(self, executable, profile_dir, url, log_in, reach_player):
+    def __init__(self, executable, profile_dir, url, site, steps, linger):
         self.profile_dir = profile_dir
         self.errors = []
         # The sync API can't nest in one thread, and interactive_login already
         # runs Playwright in this one.
         self.thread = threading.Thread(
-            target=_record, args=(lambda: self._run(executable, url, log_in, reach_player), self.errors),
+            target=_record, args=(lambda: self._run(executable, url, site, steps, linger), self.errors),
         )
         self.thread.start()
 
-    def _run(self, executable, url, log_in, reach_player):
+    def _run(self, executable, url, site, steps, linger):
         from playwright.sync_api import Error as PlaywrightError
         from playwright.sync_api import sync_playwright
 
@@ -110,17 +152,12 @@ class FakeWindow:
             )
             closed = threading.Event()
             context.on("close", lambda _: closed.set())
-            fake_spotify(context)
+            site(context)
             page = context.pages[0] if context.pages else context.new_page()
-            if log_in:
-                # The fake login page sets the login cookie as it loads.
-                page.goto(url)
-                page.wait_for_function("document.cookie.includes('sp_dc=')")
-            if log_in or reach_player:
-                page.goto("https://open.spotify.com/")
+            steps(page, url)
             # Linger like a user would (longer than spotarchive waits for the
             # login cookie); spotarchive closes the window on success.
-            for _ in range(30 if log_in else 10):
+            for _ in range(linger):
                 if closed.is_set():
                     return
                 try:
@@ -141,9 +178,11 @@ class FakeWindow:
             raise self.errors[0]
 
 
-def fake_user(log_in, reach_player=False):
+def fake_user(log_in, reach_player=False, site=fake_spotify, steps=None):
+    steps = steps or spotify_user(log_in, reach_player)
+
     def open_browser(executable, profile_dir, url):
-        window = FakeWindow(executable, profile_dir, url, log_in, reach_player)
+        window = FakeWindow(executable, profile_dir, url, site, steps, 30 if log_in else 10)
         windows.append(window)
         return window
 
@@ -213,3 +252,21 @@ def test_headless_browser_hides_automation():
             assert page.evaluate("navigator.webdriver") is False
         finally:
             browser.close()
+
+
+def test_youtube_login_captures_youtube_cookies_and_closes_window(tmp_path):
+    open_browser = fake_user(log_in=True, site=fake_youtube, steps=youtube_user)
+    session = youtube_auth.interactive_login(tmp_path / "profile", timeout_s=30, open_browser=open_browser)
+    assert any(c["name"] == "SAPISID" and c["value"] == GOOD_COOKIE for c in session.cookies)
+    assert all(c["domain"].endswith("youtube.com") for c in session.cookies)
+    assert youtube_auth.is_logged_in(session)
+    assert session.user_agent and "HeadlessChrome" not in session.user_agent
+    assert not open_browser.windows[0].is_open()
+
+
+def test_youtube_login_closed_without_logging_in(tmp_path):
+    with pytest.raises(LoginCancelled):
+        youtube_auth.interactive_login(
+            tmp_path / "profile", timeout_s=30,
+            open_browser=fake_user(log_in=False, site=fake_youtube, steps=lambda page, url: page.goto(url)),
+        )

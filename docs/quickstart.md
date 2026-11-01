@@ -69,10 +69,18 @@ Spotarchive keeps its data in a `data/` folder inside the folder you run it from
 ## 2. Log in
 
 ```bash
-spotarchive --login
+spotarchive --login spotify
 ```
 
 A browser window opens at Spotify's login page. Sign in; once Spotify forwards you to the web player, Spotarchive closes the window by itself, captures the session and caches it in the data folder. Running plain `spotarchive` starts this step automatically if there is no working login. Never share or commit the session file. Details: [Authentication](authentication.md).
+
+Optionally, log in to YouTube as well, so age-restricted songs can be downloaded:
+
+```bash
+spotarchive --login youtube
+```
+
+Plain `spotarchive` offers this after the Spotify login (yes, not now, or don't ask again). Details: [Logging in to YouTube](authentication.md#logging-in-to-youtube-optional).
 
 
 > [!NOTE]
@@ -108,7 +116,7 @@ Gives the downloaded songs proper tags (title, artists, album, ...), from the do
 spotarchive
 ```
 
-Checks GitHub for a newer version first and asks before installing it. Then it logs in if needed, fetches (asking which playlists), downloads and fixes the metadata.
+Checks GitHub for a newer version first and asks before installing it. Then it logs in if needed (and offers the optional YouTube login), fetches (asking which playlists), downloads and fixes the metadata.
 
 To update at any time, run `spotarchive --update` (`-u`). Details: [Updating](updating.md).
 

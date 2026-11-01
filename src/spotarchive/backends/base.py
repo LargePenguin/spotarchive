@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
+from spotarchive.session import YouTubeSession
 from spotarchive.setlist import ARTIST_SEPARATOR
 
 
@@ -80,6 +81,19 @@ class DownloadBackend(ABC):
     # True when files from :meth:`download` already carry the helper's own
     # metadata, so they don't need :meth:`tag` afterwards.
     tags_downloads: bool = False
+    # The YouTube login handed over by :meth:`use_youtube_login`, if any.
+    youtube_login: YouTubeSession | None = None
+
+    def use_youtube_login(self, login: YouTubeSession) -> None:
+        """Called before downloading when the user is logged in to YouTube.
+
+        *login* holds the youtube.com cookies (Playwright's format) and the
+        user agent of the browser they came from. A backend passes them on
+        in whatever form its helper takes (yt-dlp: a ``cookies.txt`` file,
+        see :meth:`YouTubeSession.netscape_cookies`); keep them private and
+        out of logs. The default just keeps them in :attr:`youtube_login`.
+        """
+        self.youtube_login = login
 
     def check(self) -> None:
         """Raise :class:`BackendUnavailable` if the backend can't run."""

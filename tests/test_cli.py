@@ -5,7 +5,7 @@ import pytest
 from spotarchive import cli, ui
 from spotarchive.backends import BackendUnavailable
 from spotarchive.download import RECORD_FILENAME
-from spotarchive.session import PlaylistState, SessionStore, SpotifySession
+from spotarchive.session import PlaylistState, SessionStore, SpotifySession, YouTubeSession
 from spotarchive.setlist import read_setlist
 from spotarchive.spotify.auth import LoginRequired
 from spotarchive.spotify.client import RateLimited, SpotifyApiError
@@ -160,7 +160,7 @@ def fake_login(monkeypatch, calls):
 def test_login_saves_user(tmp_path, fake_client, monkeypatch):
     calls = []
     fake_login(monkeypatch, calls)
-    assert cli.main(["-l"], data_dir=tmp_path) == 0
+    assert cli.main(["-l", "spotify"], data_dir=tmp_path) == 0
     assert calls == [1]
     assert SessionStore.load(tmp_path).spotify.display_name == "Fake User"
 
@@ -203,7 +203,7 @@ def rate_limited():
 def test_login_is_kept_when_rate_limited(tmp_path, fake_client, monkeypatch, capsys):
     fake_login(monkeypatch, [])
     fake_client.current_user = rate_limited
-    assert cli.main(["-l"], data_dir=tmp_path) == 1
+    assert cli.main(["--login", "spotify"], data_dir=tmp_path) == 1
     assert SessionStore.load(tmp_path).spotify.access_token == "dummy-token"
     out = capsys.readouterr().out
     assert "rate-limiting" in out
@@ -369,3 +369,178 @@ def test_unknown_backend_option_fails(tmp_path):
     settings = cli.Config(path=tmp_path / "spotarchive.toml", backend_options={"somedl": {"colour": "blue"}})
     with pytest.raises(cli.ConfigError, match=r"\[backends.somedl\]"):
         REAL_MAKE_BACKEND(settings)
+
+
+def youtube_session(expires=-1):
+    cookie = {"name": "SAPISID", "value": "dummy-cookie", "domain": ".youtube.com", "path": "/",
+              "expires": expires, "secure": True}
+    return YouTubeSession(cookies=[cookie], user_agent="dummy-agent")
+
+
+def fake_youtube_login(monkeypatch, calls, error=None):
+    def login(profile_dir, on_status=None):
+        calls.append(profile_dir.name)
+        if error:
+            raise error
+        return youtube_session()
+
+    monkeypatch.setattr(cli, "youtube_login", login)
+
+
+def answer_prompts(monkeypatch, *answers):
+    """A terminal where the single-choice prompts get *answers* in order."""
+    questions = []
+
+    def choose_one(question, choices, instruction=None):
+        questions.append((question, [value for _, value in choices], instruction))
+        return answers[len(questions) - 1]
+
+    monkeypatch.setattr(ui, "can_prompt", lambda: True)
+    monkeypatch.setattr(ui, "choose_one", choose_one)
+    return questions
+
+
+def test_login_youtube_saves_youtube_session(tmp_path, monkeypatch):
+    calls = []
+    fake_youtube_login(monkeypatch, calls)
+    monkeypatch.setattr(cli, "interactive_login", lambda *a, **kw: pytest.fail("should not log in to Spotify"))
+    assert cli.main(["-l", "youtube"], data_dir=tmp_path) == 0
+    assert calls == [cli.YOUTUBE_PROFILE_DIRNAME]
+    store = SessionStore.load(tmp_path)
+    assert store.youtube == youtube_session()
+    assert store.spotify is None
+
+
+def test_login_site_is_case_insensitive(tmp_path, monkeypatch):
+    calls = []
+    fake_youtube_login(monkeypatch, calls)
+    assert cli.main(["--login", "YouTube"], data_dir=tmp_path) == 0
+    assert calls
+
+
+def test_login_unknown_site_is_a_usage_error(tmp_path):
+    with pytest.raises(SystemExit):
+        cli.main(["-l", "nope"], data_dir=tmp_path)
+
+
+def test_login_without_site_asks_which(tmp_path, monkeypatch):
+    calls = []
+    fake_youtube_login(monkeypatch, calls)
+    questions = answer_prompts(monkeypatch, "youtube")
+    assert cli.main(["-l"], data_dir=tmp_path) == 0
+    assert questions[0][1] == ["spotify", "youtube"]
+    assert calls
+
+
+def test_login_without_site_and_terminal_fails(tmp_path, capsys):
+    assert cli.main(["-l"], data_dir=tmp_path) == 1
+    assert "-l youtube" in " ".join(capsys.readouterr().out.split())
+
+
+def test_login_without_site_cancelled(tmp_path, monkeypatch):
+    answer_prompts(monkeypatch, None)
+    assert cli.main(["-l"], data_dir=tmp_path) == 130
+
+
+def test_default_run_offers_youtube_login(logged_in, fake_client, fake_backend, monkeypatch):
+    calls = []
+    fake_youtube_login(monkeypatch, calls)
+    choose(monkeypatch, ["p1"])
+    questions = answer_prompts(monkeypatch, "yes")
+    assert cli.main([], data_dir=logged_in) == 0
+    question, values, instruction = questions[0]
+    assert values == ["yes", "no", "never"]
+    assert "spotarchive -l youtube" in instruction
+    assert calls
+    # The new login reaches the backend.
+    assert fake_backend.youtube_login == youtube_session()
+
+
+def test_default_run_declined_youtube_login_asks_again(logged_in, fake_client, monkeypatch, capsys):
+    fake_youtube_login(monkeypatch, [])
+    choose(monkeypatch, [])
+    questions = answer_prompts(monkeypatch, "no", "no")
+    cli.main([], data_dir=logged_in)
+    assert "spotarchive -l youtube" in capsys.readouterr().out
+    cli.main([], data_dir=logged_in)
+    assert len(questions) == 2
+    assert SessionStore.load(logged_in).youtube is None
+
+
+def test_default_run_youtube_login_dont_ask_again(logged_in, fake_client, monkeypatch):
+    fake_youtube_login(monkeypatch, [])
+    choose(monkeypatch, [])
+    questions = answer_prompts(monkeypatch, "never")
+    cli.main([], data_dir=logged_in)
+    assert SessionStore.load(logged_in).offer_youtube_login is False
+    cli.main([], data_dir=logged_in)
+    assert len(questions) == 1
+
+
+def test_youtube_login_brings_the_offer_back(logged_in, monkeypatch):
+    store = SessionStore.load(logged_in)
+    store.offer_youtube_login = False
+    store.save()
+    fake_youtube_login(monkeypatch, [])
+    cli.main(["-l", "youtube"], data_dir=logged_in)
+    assert SessionStore.load(logged_in).offer_youtube_login is True
+
+
+def test_default_run_doesnt_offer_when_logged_in(logged_in, fake_client, monkeypatch):
+    store = SessionStore.load(logged_in)
+    store.youtube = youtube_session()
+    store.save()
+    choose(monkeypatch, [])
+    questions = answer_prompts(monkeypatch)
+    assert cli.main([], data_dir=logged_in) == 0
+    assert questions == []
+
+
+def test_default_run_offers_again_when_youtube_login_expired(logged_in, fake_client, monkeypatch, capsys):
+    store = SessionStore.load(logged_in)
+    store.youtube = youtube_session(expires=1000)
+    store.save()
+    choose(monkeypatch, [])
+    questions = answer_prompts(monkeypatch, "no")
+    cli.main([], data_dir=logged_in)
+    assert len(questions) == 1
+    assert "expired" in capsys.readouterr().out
+
+
+def test_failed_youtube_login_doesnt_stop_the_run(logged_in, fake_client, fake_backend, monkeypatch, capsys):
+    from spotarchive.browser import LoginCancelled
+
+    fake_youtube_login(monkeypatch, [], error=LoginCancelled("The browser was closed before the login finished."))
+    choose(monkeypatch, ["p1"])
+    answer_prompts(monkeypatch, "yes")
+    assert cli.main([], data_dir=logged_in) == 0
+    assert fake_backend.requested == ["Song A", "Song B"]
+    assert fake_backend.youtube_login is None
+    assert "continuing without it" in capsys.readouterr().out
+
+
+def test_default_run_without_terminal_doesnt_offer(logged_in, fake_client, monkeypatch):
+    monkeypatch.setattr(ui, "choose_one", lambda *a, **kw: pytest.fail("should not prompt"))
+    choose(monkeypatch, [])
+    assert cli.main([], data_dir=logged_in) == 0
+
+
+def test_download_passes_youtube_login_to_backend(logged_in, fake_client, fake_backend, monkeypatch):
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    store = SessionStore.load(logged_in)
+    store.youtube = youtube_session()
+    store.save()
+    assert cli.main(["-d"], data_dir=logged_in) == 0
+    assert fake_backend.youtube_login == youtube_session()
+
+
+def test_download_with_expired_youtube_login_warns(logged_in, fake_client, fake_backend, monkeypatch, capsys):
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    store = SessionStore.load(logged_in)
+    store.youtube = youtube_session(expires=1000)
+    store.save()
+    assert cli.main(["-d"], data_dir=logged_in) == 0
+    assert fake_backend.youtube_login is None
+    assert "-l youtube" in " ".join(capsys.readouterr().out.split())
