@@ -16,7 +16,7 @@ Spotarchive never acquires music from Spotify. The only data taken from Spotify 
 
 ## 1. Install
 
-You need Python and git. Then run one command.
+You need Python. Then run one command.
 
 **Linux:**
 
@@ -32,7 +32,7 @@ irm https://raw.githubusercontent.com/LargePenguin/spotarchive/main/install.ps1 
 
 The install script:
 
-1. clones Spotarchive into `~/spotarchive` (`%USERPROFILE%\spotarchive` on Windows), or pulls the latest version if the clone is already there;
+1. downloads Spotarchive from GitHub into `~/spotarchive` (`%USERPROFILE%\spotarchive` on Windows), or refreshes the files there if it's already installed (your settings and data are kept). No git needed;
 2. creates a virtualenv `.venv` in that folder and installs Spotarchive with all its Python dependencies, including SomeDL, the default [download backend](backends.md), and the Deno runtime its downloader yt-dlp needs for YouTube;
 3. downloads the Chromium browser used for [logging in](authentication.md#which-browser-is-used);
 4. installs [FFmpeg](https://ffmpeg.org/), which SomeDL needs, if it's missing. It asks first, then uses your package manager (apt, dnf, pacman, zypper or apk) or winget on Windows;
@@ -42,7 +42,7 @@ The install script:
 Running it again repairs or updates the install. If you already have a clone, run `./install.sh` or `powershell -ExecutionPolicy Bypass -File install.ps1` inside it to install that clone instead.
 
 > [!TIP]
-> Options: `--dir`/`-Dir` (where to clone), `--bin-dir`/`-BinDir` (where the command goes), `--no-browser`/`-NoBrowser` (skip Chromium if you use Chrome or Edge), `--no-ffmpeg`/`-NoFfmpeg`, `--no-link`/`-NoLink`, `--dev`/`-Dev` (test dependencies) and `--yes`/`-Yes` (don't ask, say yes to everything). When piping the script, pass Linux options as `bash -s -- --no-browser`. On Windows, set `SPOTARCHIVE_DIR` or `SPOTARCHIVE_BIN_DIR` beforehand instead.
+> Options: `--dir`/`-Dir` (where to install it), `--bin-dir`/`-BinDir` (where the command goes), `--no-browser`/`-NoBrowser` (skip Chromium if you use Chrome or Edge), `--no-ffmpeg`/`-NoFfmpeg`, `--no-link`/`-NoLink`, `--dev`/`-Dev` (test dependencies) and `--yes`/`-Yes` (don't ask, say yes to everything). When piping the script, pass Linux options as `bash -s -- --no-browser`. On Windows, set `SPOTARCHIVE_DIR` or `SPOTARCHIVE_BIN_DIR` beforehand instead.
 
 <details>
 <summary>Installing by hand</summary>
