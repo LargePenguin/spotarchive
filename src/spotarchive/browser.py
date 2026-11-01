@@ -40,6 +40,32 @@ LINUX_BROWSERS = ("google-chrome", "google-chrome-stable", "microsoft-edge", "mi
 WINDOWS_BROWSERS = ("Google/Chrome/Application/chrome.exe", "Microsoft/Edge/Application/msedge.exe")
 WINDOWS_ROOTS = ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")
 
+# Browsers the user can pick for the login window (config: [login] browser):
+# name -> (executable names on PATH on Linux, paths below WINDOWS_ROOTS).
+# "chromium" also accepts Playwright's bundled Chromium.
+NAMED_BROWSERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "chrome": (("google-chrome", "google-chrome-stable", "chrome"), ("Google/Chrome/Application/chrome.exe",)),
+    "edge": (("microsoft-edge", "microsoft-edge-stable"), ("Microsoft/Edge/Application/msedge.exe",)),
+    "brave": (
+        ("brave-browser", "brave-browser-stable", "brave"),
+        ("BraveSoftware/Brave-Browser/Application/brave.exe",),
+    ),
+    "vivaldi": (("vivaldi", "vivaldi-stable"), ("Vivaldi/Application/vivaldi.exe",)),
+    "opera": (("opera",), ("Programs/Opera/opera.exe", "Opera/opera.exe")),
+    "chromium": (("chromium", "chromium-browser"), ("Chromium/Application/chrome.exe",)),
+}
+# Flatpak app IDs of the same browsers (Linux), used when no executable is on PATH.
+FLATPAK_BROWSERS = {
+    "chrome": "com.google.Chrome",
+    "edge": "com.microsoft.Edge",
+    "brave": "com.brave.Browser",
+    "vivaldi": "com.vivaldi.Vivaldi",
+    "opera": "com.opera.Opera",
+    "chromium": "org.chromium.Chromium",
+}
+FLATPAK_PREFIX = "flatpak:"
+BROWSER_ALIASES = {"google-chrome": "chrome", "msedge": "edge", "microsoft-edge": "edge", "brave-browser": "brave"}
+
 
 class AuthError(Exception):
     """Base class for login problems."""
@@ -78,9 +104,59 @@ def installed_browsers() -> list[Path]:
     return [path for path in found if path.is_file()]
 
 
-def login_browser(playwright) -> Path:
-    candidates = installed_browsers()
+def canonical_browser(name: str) -> str | None:
+    """The key in NAMED_BROWSERS for a user-given name (case-insensitive), or None if unknown."""
+    key = name.strip().lower()
+    key = BROWSER_ALIASES.get(key, key)
+    return key if key in NAMED_BROWSERS else None
+
+
+def named_browser(name: str) -> list[Path]:
+    """Executables of the browser called *name* (a NAMED_BROWSERS key) installed on this computer."""
+    linux_names, windows_paths = NAMED_BROWSERS[name]
+    if os.name == "nt":
+        roots = [os.environ.get(var) for var in WINDOWS_ROOTS]
+        found = [Path(root) / rel for rel in windows_paths for root in roots if root]
+    else:
+        found = [Path(path) for exe in linux_names if (path := shutil.which(exe))]
+    return [path for path in found if path.is_file()]
+
+
+def flatpak_installed(app_id: str) -> bool:
+    """Whether the Flatpak app *app_id* is installed (Linux only)."""
+    if os.name == "nt" or not shutil.which("flatpak"):
+        return False
+    try:
+        return subprocess.run(
+            ["flatpak", "info", app_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def login_browser(playwright, browser: str | None = None) -> Path | str:
+    """The browser for the login window: *browser* (a NAMED_BROWSERS name),
+    or by default the first installed Chrome, Edge or Playwright's Chromium.
+
+    A Flatpak install is returned as ``"flatpak:<app id>"``.
+    """
     bundled = Path(playwright.chromium.executable_path)
+    if browser:
+        key = canonical_browser(browser)
+        if key is None:
+            raise BrowserUnavailable(f"Unknown browser {browser!r}; choose one of: {', '.join(NAMED_BROWSERS)}.")
+        candidates: list[Path | str] = list(named_browser(key))
+        if not candidates and flatpak_installed(FLATPAK_BROWSERS[key]):
+            candidates.append(FLATPAK_PREFIX + FLATPAK_BROWSERS[key])
+        if key == "chromium" and bundled.is_file():
+            candidates.append(bundled)
+        if not candidates:
+            raise BrowserUnavailable(
+                f"Couldn't find {key} on this computer (login.browser in the configuration file). "
+                "Install it, or leave the setting empty to use whichever supported browser is found."
+            )
+        return candidates[0]
+    candidates = installed_browsers()
     if bundled.is_file():
         candidates.append(bundled)
     if not candidates:
@@ -91,15 +167,20 @@ def login_browser(playwright) -> Path:
     return candidates[0]
 
 
-def login_browser_command(executable: Path, profile_dir: Path, url: str) -> list[str]:
+def login_browser_command(executable: Path | str, profile_dir: Path, url: str) -> list[str]:
     """A plain (not automated) browser window on its own profile.
 
     The DevTools port (picked by the browser, see :func:`read_debug_port`)
     only lets spotarchive see which page the window is on; nothing attaches
     to the page while the user logs in.
     """
+    if str(executable).startswith(FLATPAK_PREFIX):
+        # The sandbox needs access to the profile folder (it holds the port file).
+        launcher = ["flatpak", "run", f"--filesystem={profile_dir}", str(executable)[len(FLATPAK_PREFIX):]]
+    else:
+        launcher = [str(executable)]
     return [
-        str(executable),
+        *launcher,
         f"--user-data-dir={profile_dir}",
         "--remote-debugging-port=0",
         # No --disable-blink-features=AutomationControlled here: current Chrome
@@ -132,7 +213,7 @@ class LoginWindow(Protocol):
 class BrowserProcess:
     """The login window, started as a plain browser process."""
 
-    def __init__(self, executable: Path, profile_dir: Path, url: str):
+    def __init__(self, executable: Path | str, profile_dir: Path, url: str):
         self.profile_dir = profile_dir
         try:
             self._process = subprocess.Popen(
@@ -163,7 +244,7 @@ class BrowserProcess:
             self._process.kill()
 
 
-def open_login_browser(executable: Path, profile_dir: Path, url: str) -> LoginWindow:
+def open_login_browser(executable: Path | str, profile_dir: Path, url: str) -> LoginWindow:
     return BrowserProcess(executable, profile_dir, url)
 
 
@@ -247,13 +328,16 @@ def capture_login(
     timeout_s: int = LOGIN_TIMEOUT_S,
     on_status: Callable[[str], None] = lambda msg: None,
     open_browser: Callable[[Path, Path, str], LoginWindow] = open_login_browser,
+    browser: str | None = None,
 ) -> tuple[list[dict], str]:
     """Let the user log in to *site* in a normal browser window.
 
     Returns the kept cookies and the browser's user agent, read from the
     running window, which is then closed. The window uses *profile_dir* as
     its profile, which is kept so the site recognises the device on later
-    logins. *open_browser* exists for tests.
+    logins. *browser* names the browser to use (see :data:`NAMED_BROWSERS`);
+    by default the first installed Chrome, Edge or Playwright's Chromium.
+    *open_browser* exists for tests.
     """
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import sync_playwright
@@ -261,7 +345,8 @@ def capture_login(
     profile_dir = Path(profile_dir).resolve()
     prepare_profile(profile_dir)
     with sync_playwright() as p:
-        executable = login_browser(p)
+        executable = login_browser(p, browser)
+        on_status(describe_browser(executable))
         window = open_browser(executable, profile_dir, site.login_url)
         on_status(
             f"Log in to {site.name} in the browser window that just opened; "
@@ -273,6 +358,14 @@ def capture_login(
             raise AuthError(f"Reading the login failed: {str(exc).splitlines()[0]}") from exc
         finally:
             window.close()
+
+
+def describe_browser(executable: Path | str) -> str:
+    """The "Using ..." line shown before the login window opens."""
+    name = str(executable)
+    if name.startswith(FLATPAK_PREFIX):
+        return f"Using {name[len(FLATPAK_PREFIX):]} (Flatpak)"
+    return f"Using {name}"
 
 
 def normalize_user_agent(user_agent: str) -> str:

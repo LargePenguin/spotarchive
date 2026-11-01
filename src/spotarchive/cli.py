@@ -107,14 +107,14 @@ def _duration(seconds: float) -> str:
     return f"about {round(minutes / 60)} hours"
 
 
-def run_login(store: SessionStore, site: str | bool) -> None:
+def run_login(store: SessionStore, site: str | bool, browser: str = "") -> None:
     """``--login [SITE]``: log in to *site*, or ask which (``True``)."""
     if site is True:
         site = choose_login_site()
     if site == "youtube":
-        run_youtube_login(store)
+        run_youtube_login(store, browser)
     else:
-        run_spotify_login(store)
+        run_spotify_login(store, browser)
 
 
 def choose_login_site() -> str:
@@ -129,9 +129,11 @@ def choose_login_site() -> str:
     return site
 
 
-def run_spotify_login(store: SessionStore) -> None:
+def run_spotify_login(store: SessionStore, browser: str = "") -> None:
     ui.info("Opening a browser for the Spotify login...")
-    store.spotify = interactive_login(store.path.parent / BROWSER_PROFILE_DIRNAME, on_status=ui.info)
+    store.spotify = interactive_login(
+        store.path.parent / BROWSER_PROFILE_DIRNAME, on_status=ui.info, browser=browser or None
+    )
     # Keep the login even if the next request fails (e.g. rate limiting).
     store.save()
     user = make_client(store).current_user()
@@ -141,16 +143,18 @@ def run_spotify_login(store: SessionStore) -> None:
     ui.ok(f"Logged in to Spotify as {store.spotify.display_name}.")
 
 
-def run_youtube_login(store: SessionStore) -> None:
+def run_youtube_login(store: SessionStore, browser: str = "") -> None:
     ui.info("Opening a browser for the YouTube login...")
-    store.youtube = youtube_login(store.path.parent / YOUTUBE_PROFILE_DIRNAME, on_status=ui.info)
+    store.youtube = youtube_login(
+        store.path.parent / YOUTUBE_PROFILE_DIRNAME, on_status=ui.info, browser=browser or None
+    )
     # Someone who logged in wants to hear about it when the login expires.
     store.offer_youtube_login = True
     store.save()
     ui.ok("Logged in to YouTube; age-restricted songs can be downloaded now.")
 
 
-def offer_youtube_login(store: SessionStore) -> None:
+def offer_youtube_login(store: SessionStore, browser: str = "") -> None:
     """Plain runs: offer the optional YouTube login when there's no working one.
 
     A failed YouTube login doesn't stop the run; downloads go on without it.
@@ -173,15 +177,15 @@ def offer_youtube_login(store: SessionStore) -> None:
         ui.info(YOUTUBE_LOGIN_HINT)
         return
     try:
-        run_youtube_login(store)
+        run_youtube_login(store, browser)
     except AuthError as exc:
         ui.warn(f"The YouTube login didn't work ({exc}); continuing without it. {YOUTUBE_LOGIN_HINT}")
 
 
-def ensure_login(store: SessionStore) -> None:
+def ensure_login(store: SessionStore, browser: str = "") -> None:
     """Run the login helper unless the saved login still works."""
     if store.spotify is None:
-        run_spotify_login(store)
+        run_spotify_login(store, browser)
         return
     try:
         make_client(store).current_user()
@@ -190,7 +194,7 @@ def ensure_login(store: SessionStore) -> None:
         raise
     except (AuthError, SpotifyApiError) as exc:
         ui.warn(f"The saved Spotify login doesn't work ({exc}).")
-        run_spotify_login(store)
+        run_spotify_login(store, browser)
 
 
 def run_fetch(store: SessionStore, data_dir: Path, noselect: bool) -> None:
@@ -476,10 +480,10 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
         data_dir = settings.data_dir if data_dir is None else data_dir
         store = SessionStore.load(data_dir)
         if args.login:
-            run_login(store, args.login)
+            run_login(store, args.login, settings.login_browser)
         if plain:
-            ensure_login(store)
-            offer_youtube_login(store)
+            ensure_login(store, settings.login_browser)
+            offer_youtube_login(store, settings.login_browser)
             run_fetch(store, data_dir, noselect=False)
             # With nothing selected, fetching has already said so.
             if not selected_folders(store, data_dir):

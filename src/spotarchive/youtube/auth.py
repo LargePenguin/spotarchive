@@ -87,14 +87,15 @@ def interactive_login(
     timeout_s: int = LOGIN_TIMEOUT_S,
     on_status: Callable[[str], None] = lambda msg: None,
     open_browser: Callable[[Path, Path, str], LoginWindow] = open_login_browser,
+    browser: str | None = None,
 ) -> YouTubeSession:
     """Let the user log in to YouTube in a normal browser window, then capture the session.
 
     The login counts as done when a tab reaches YouTube with its login
-    cookies set; see :func:`spotarchive.browser.capture_login`.
-    *open_browser* exists for tests.
+    cookies set; see :func:`spotarchive.browser.capture_login`, which also
+    explains *browser*. *open_browser* exists for tests.
     """
-    cookies, user_agent = capture_login(YOUTUBE, profile_dir, timeout_s, on_status, open_browser)
+    cookies, user_agent = capture_login(YOUTUBE, profile_dir, timeout_s, on_status, open_browser, browser)
     return YouTubeSession(
         cookies=cookies,
         user_agent=normalize_user_agent(user_agent),

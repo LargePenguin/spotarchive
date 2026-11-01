@@ -36,6 +36,12 @@ data_dir = "~/Music/spotarchive"
 
 Moving `data_dir` doesn't move existing files: move the old folder's contents yourself, or you'll have to log in and fetch again.
 
+### `[login]`
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `browser` | `""` | Browser for the [login windows](authentication.md#which-browser-is-used) (Spotify and YouTube): `"chrome"`, `"edge"`, `"brave"`, `"vivaldi"`, `"opera"` or `"chromium"` (case-insensitive). Empty: the first of Chrome, Edge and Playwright's bundled Chromium that is found. A named browser that isn't installed is an error, with no fallback. |
+
 ### `[download]`
 
 | Setting | Default | Meaning |

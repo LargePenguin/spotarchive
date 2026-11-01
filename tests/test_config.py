@@ -67,3 +67,20 @@ extra_args = ["--sleep", "5"]
 def test_bad_files(tmp_path, text, message):
     with pytest.raises(ConfigError, match=message):
         config.load(write(tmp_path, text))
+
+
+def test_login_browser(tmp_path):
+    path = tmp_path / "spotarchive.toml"
+    path.write_text('[login]\nbrowser = " Brave "\n')
+    assert config.load(path).login_browser == "brave"
+    path.write_text('[login]\nbrowser = "msedge"\n')
+    assert config.load(path).login_browser == "edge"
+    path.write_text('[login]\nbrowser = ""\n')
+    assert config.load(path).login_browser == ""
+
+
+def test_login_browser_unknown(tmp_path):
+    path = tmp_path / "spotarchive.toml"
+    path.write_text('[login]\nbrowser = "firefox"\n')
+    with pytest.raises(ConfigError, match="login.browser"):
+        config.load(path)

@@ -29,12 +29,14 @@ from urllib.parse import urlparse
 
 from spotarchive.browser import (  # noqa: F401  (re-exported)
     LOGIN_TIMEOUT_S,
+    NAMED_BROWSERS,
     POLL_MS,
     AuthError,
     BrowserUnavailable,
     LoginCancelled,
     LoginSite,
     LoginWindow,
+    canonical_browser,
     capture_login,
     installed_browsers,
     login_browser_command,
@@ -217,15 +219,17 @@ def interactive_login(
     on_status: Callable[[str], None] = lambda msg: None,
     open_browser: Callable[[Path, Path, str], LoginWindow] = open_login_browser,
     configure_context: Callable[[object], None] | None = None,
+    browser: str | None = None,
 ) -> SpotifySession:
     """Let the user log in in a normal browser window, then capture the session.
 
     The login counts as done when the window is redirected to the web player
-    with Spotify's login cookie set; see :func:`spotarchive.browser.capture_login`.
+    with Spotify's login cookie set; see :func:`spotarchive.browser.capture_login`,
+    which also explains *browser*.
     *open_browser* and *configure_context* (passed on to
     :func:`refresh_session`, e.g. to route requests to fakes) exist for tests.
     """
-    cookies, user_agent = capture_login(SPOTIFY, profile_dir, timeout_s, on_status, open_browser)
+    cookies, user_agent = capture_login(SPOTIFY, profile_dir, timeout_s, on_status, open_browser, browser)
     on_status("Logged in; getting an access token...")
     session = SpotifySession(cookies=cookies, user_agent=normalize_user_agent(user_agent))
     try:
