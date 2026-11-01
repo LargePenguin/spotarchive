@@ -90,6 +90,16 @@ NAMED_BROWSERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
     "opera": (("opera",), ("Programs/Opera/opera.exe", "Opera/opera.exe")),
     "chromium": (("chromium", "chromium-browser"), ("Chromium/Application/chrome.exe",)),
 }
+# Flatpak app IDs of the same browsers (Linux), used when no executable is on PATH.
+FLATPAK_BROWSERS = {
+    "chrome": "com.google.Chrome",
+    "edge": "com.microsoft.Edge",
+    "brave": "com.brave.Browser",
+    "vivaldi": "com.vivaldi.Vivaldi",
+    "opera": "com.opera.Opera",
+    "chromium": "org.chromium.Chromium",
+}
+FLATPAK_PREFIX = "flatpak:"
 BROWSER_ALIASES = {"google-chrome": "chrome", "msedge": "edge", "microsoft-edge": "edge", "brave-browser": "brave"}
 
 
@@ -271,13 +281,27 @@ def named_browser(name: str) -> list[Path]:
     return [path for path in found if path.is_file()]
 
 
-def _login_browser(playwright, browser: str | None = None) -> Path:
+def flatpak_installed(app_id: str) -> bool:
+    """Whether the Flatpak app *app_id* is installed (Linux only)."""
+    if os.name == "nt" or not shutil.which("flatpak"):
+        return False
+    try:
+        return subprocess.run(
+            ["flatpak", "info", app_id], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def _login_browser(playwright, browser: str | None = None) -> Path | str:
     bundled = Path(playwright.chromium.executable_path)
     if browser:
         key = canonical_browser(browser)
         if key is None:
             raise BrowserUnavailable(f"Unknown browser {browser!r}; choose one of: {', '.join(NAMED_BROWSERS)}.")
-        candidates = named_browser(key)
+        candidates: list[Path | str] = list(named_browser(key))
+        if not candidates and flatpak_installed(FLATPAK_BROWSERS[key]):
+            candidates.append(FLATPAK_PREFIX + FLATPAK_BROWSERS[key])
         if key == "chromium" and bundled.is_file():
             candidates.append(bundled)
         if not candidates:
@@ -297,15 +321,20 @@ def _login_browser(playwright, browser: str | None = None) -> Path:
     return candidates[0]
 
 
-def login_browser_command(executable: Path, profile_dir: Path, url: str) -> list[str]:
+def login_browser_command(executable: Path | str, profile_dir: Path, url: str) -> list[str]:
     """A plain (not automated) browser window on its own profile.
 
     The DevTools port (picked by the browser, see :func:`read_debug_port`)
     only lets spotarchive see which page the window is on; nothing attaches
     to the page while the user logs in.
     """
+    if str(executable).startswith(FLATPAK_PREFIX):
+        # The sandbox needs access to the profile folder (it holds the port file).
+        launcher = ["flatpak", "run", f"--filesystem={profile_dir}", str(executable)[len(FLATPAK_PREFIX):]]
+    else:
+        launcher = [str(executable)]
     return [
-        str(executable),
+        *launcher,
         f"--user-data-dir={profile_dir}",
         "--remote-debugging-port=0",
         # No --disable-blink-features=AutomationControlled here: current Chrome
@@ -338,7 +367,7 @@ class LoginWindow(Protocol):
 class BrowserProcess:
     """The login window, started as a plain browser process."""
 
-    def __init__(self, executable: Path, profile_dir: Path, url: str):
+    def __init__(self, executable: Path | str, profile_dir: Path, url: str):
         self.profile_dir = profile_dir
         try:
             self._process = subprocess.Popen(
@@ -369,7 +398,7 @@ class BrowserProcess:
             self._process.kill()
 
 
-def open_login_browser(executable: Path, profile_dir: Path, url: str) -> LoginWindow:
+def open_login_browser(executable: Path | str, profile_dir: Path, url: str) -> LoginWindow:
     return BrowserProcess(executable, profile_dir, url)
 
 
