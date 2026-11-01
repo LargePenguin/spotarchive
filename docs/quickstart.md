@@ -92,7 +92,7 @@ Choose which playlists to cache. Each gets a folder under the download folder (d
 spotarchive --download
 ```
 
-SomeDL finds each song of your setlists on YouTube Music and saves it into the playlist's folder. Songs already present are skipped, so running it again only downloads what's new or failed before. `spotarchive -fnd` refreshes your setlists and downloads in one go. Details: [Downloading](downloading.md).
+SomeDL finds each song of your setlists on YouTube Music and saves it into the playlist's folder. Several songs download at once (`-t N` sets how many; `-t 1` shows SomeDL's own output). Songs already present are skipped, so running it again only downloads what's new or failed before. `spotarchive -fnd` refreshes your setlists and downloads in one go. Details: [Downloading](downloading.md).
 
 ## 5. Fix the metadata
 

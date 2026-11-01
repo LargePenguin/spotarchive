@@ -13,7 +13,14 @@ import requests
 from spotarchive import __version__, config, ui, update
 from spotarchive.backends import BackendUnavailable, DownloadBackend, get_backend
 from spotarchive.config import Config, ConfigError
-from spotarchive.download import PlaylistDownload, download_playlist, selected_folders
+from spotarchive.download import (
+    DownloadListener,
+    SongDownload,
+    download_all,
+    prepare_playlist,
+    selected_folders,
+)
+from spotarchive.downloadlog import DownloadLog
 from spotarchive.fetch import fetch_setlists, update_selection
 from spotarchive.meta import PlaylistMeta, fix_playlist_metadata
 from spotarchive.session import SessionError, SessionStore
@@ -59,6 +66,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="fix the metadata (tags) of the downloaded songs (-dm: download, then fix)",
     )
     parser.add_argument(
+        "-t", "--threads", type=_thread_count, metavar="N",
+        help="download N songs at once (default: [download] threads in the config, "
+             "else half of the CPU threads); 1 shows the download helper's own output",
+    )
+    parser.add_argument(
         "-c", "--config", type=Path, metavar="FILE",
         help=f"configuration file to use (default: {config.CONFIG_FILENAME} in the project folder)",
     )
@@ -68,6 +80,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("-V", "--version", action="version", version=f"%(prog)s {__version__}")
     return parser
+
+
+def _thread_count(value: str) -> int:
+    try:
+        threads = int(value)
+    except ValueError:
+        threads = 0
+    if threads < 1:
+        raise argparse.ArgumentTypeError(f"must be a whole number of 1 or more, not {value!r}")
+    return threads
 
 
 def make_client(store: SessionStore) -> SpotifyClient:
@@ -175,32 +197,54 @@ def make_backend(settings: Config) -> DownloadBackend:
         raise ConfigError(f"{settings.path}: bad setting in [backends.{settings.backend}]: {exc}") from exc
 
 
-def run_download(store: SessionStore, data_dir: Path, settings: Config) -> None:
+def run_download(store: SessionStore, data_dir: Path, settings: Config, threads: int | None = None) -> None:
+    """Download what's missing; *threads* (from --threads) overrides the configured number."""
     folders = selected_folders(store, data_dir)
     if not folders:
         raise CliError("No playlists have been fetched yet; run `spotarchive --fetch` first.")
     backend = make_backend(settings)
     backend.check()
+    log = DownloadLog.for_run(data_dir)
     for warning in backend.warnings():
         ui.warn(warning)
+        log.warning(warning)
+    threads = threads or settings.download_threads()
 
-    failed_songs = unfetched = 0
+    playlists, unfetched = [], 0
     for name, folder in folders:
         try:
-            if backend.shows_own_output:
-                result = _download_showing_backend(backend, name, folder)
-            else:
-                result = _download_with_progress(backend, name, folder)
+            playlists.append(prepare_playlist(backend, name, folder))
         except FileNotFoundError as exc:
             unfetched += 1
             ui.error(f"{name}: {exc}")
-            continue
+            log.error(str(exc), name)
+    pending = sum(len(p.pending) for p in playlists)
+
+    if threads > 1:
+        if pending:
+            ui.info(f"Downloading {pending} songs, up to {min(threads, pending)} at a time...")
+        with ui.DownloadBoard() as board:
+            download_all(backend, playlists, threads, _BoardListener(board, len(playlists) > 1), log)
+    elif backend.shows_own_output:
+        download_all(backend, playlists, 1, _OwnOutputListener(), log)
+    else:
+        with ui.progress() as bar:
+            download_all(backend, playlists, 1, _ProgressListener(bar), log)
+
+    failed_songs = 0
+    for result in playlists:
         failed_songs += len(result.failed)
-        summary = f"{name}: {result.downloaded} downloaded, {result.already_present} already there"
+        summary = f"{result.name}: {result.downloaded} downloaded, {result.already_present} already there"
         if result.failed:
             ui.warn(f"{summary}, {len(result.failed)} failed")
         else:
             ui.ok(summary)
+    if playlists:
+        downloaded = sum(p.downloaded for p in playlists)
+        total = f"Total: {downloaded} downloaded, {failed_songs} failed"
+        (ui.warn if failed_songs else ui.ok)(f"{total}, {sum(p.already_present for p in playlists)} already there.")
+    if log.written:
+        ui.info(f"{_plural(log.errors, 'error')} and {_plural(log.warnings, 'warning')} were logged to {log.path}")
 
     problems = []
     if failed_songs:
@@ -213,38 +257,63 @@ def run_download(store: SessionStore, data_dir: Path, settings: Config) -> None:
         raise CliError(" ".join(problems))
 
 
-def _download_showing_backend(backend: DownloadBackend, name: str, folder: Path) -> PlaylistDownload:
-    ui.info(f"{name}: checking which songs are missing...")
-
-    def on_start(song, i, n):
-        ui.info(f"[{i}/{n}] {song.label}")
-
-    def on_done(song, files, error):
-        if error:
-            ui.warn(f"{song.label}: {error}")
-
-    return download_playlist(backend, name, folder, on_start, on_done)
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
 
 
-def _download_with_progress(backend: DownloadBackend, name: str, folder: Path) -> PlaylistDownload:
-    failures = []
-    with ui.progress() as bar:
-        task = bar.add_task(name, total=None)
+class _OwnOutputListener(DownloadListener):
+    """One song at a time, with the backend's own output under a line per song."""
 
-        def on_start(song, i, n):
-            bar.update(task, completed=i - 1, total=n)
+    def __init__(self):
+        self._playlist = None
 
-        def on_done(song, files, error):
-            bar.advance(task)
-            if error:
-                failures.append(f"{song.label}: {error}")
+    def started(self, job: SongDownload) -> None:
+        if job.playlist is not self._playlist:
+            self._playlist = job.playlist
+            ui.info(f"{job.playlist.name}: {job.count} songs to download")
+        ui.info(f"[{job.position}/{job.count}] {job.song.label}")
 
-        result = download_playlist(backend, name, folder, on_start, on_done)
-        attempted = result.downloaded + len(result.failed)
-        bar.update(task, completed=attempted, total=attempted)
-    for failure in failures:
-        ui.warn(failure)
-    return result
+    def finished(self, job: SongDownload) -> None:
+        if not job.ok:
+            ui.warn(f"{job.song.label}: {job.playlist.failed[-1][1]}")
+
+
+class _ProgressListener(DownloadListener):
+    """One song at a time, with a progress bar per playlist (backends that print nothing)."""
+
+    def __init__(self, bar):
+        self.bar = bar
+        self._tasks: dict[int, int] = {}
+
+    def started(self, job: SongDownload) -> None:
+        key = id(job.playlist)
+        if key not in self._tasks:
+            self._tasks[key] = self.bar.add_task(job.playlist.name, total=job.count)
+
+    def finished(self, job: SongDownload) -> None:
+        self.bar.advance(self._tasks[id(job.playlist)])
+        if not job.ok:
+            self.bar.console.print(f"[yellow]![/] {ui.escape(job.song.label)}: {ui.escape(job.playlist.failed[-1][1])}")
+
+
+class _BoardListener(DownloadListener):
+    """Several songs at once, on a :class:`ui.DownloadBoard`."""
+
+    def __init__(self, board: ui.DownloadBoard, show_playlist: bool):
+        self.board = board
+        self.show_playlist = show_playlist
+
+    def _label(self, job: SongDownload) -> str:
+        return f"{job.playlist.name}: {job.song.label}" if self.show_playlist else job.song.label
+
+    def started(self, job: SongDownload) -> None:
+        self.board.start(job, self._label(job))
+
+    def progress(self, job: SongDownload, fraction: float) -> None:
+        self.board.progress(job, fraction)
+
+    def finished(self, job: SongDownload) -> None:
+        self.board.finish(job, self._label(job), job.ok, len(job.files or []), len(job.errors), len(job.warnings))
 
 
 def run_meta(store: SessionStore, data_dir: Path, settings: Config) -> None:
@@ -381,9 +450,11 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
     args = parser.parse_args(argv)
     if args.noselect and not args.fetch:
         parser.error("--noselect only works together with --fetch (e.g. -fn)")
-    if args.update and (args.login or args.fetch or args.download or args.meta):
+    if args.update and (args.login or args.fetch or args.download or args.meta or args.threads):
         parser.error("--update can't be combined with other options")
     plain = not (args.login or args.fetch or args.download or args.meta)
+    if args.threads is not None and not (args.download or plain):
+        parser.error("--threads only works when downloading (e.g. -d -t 4)")
 
     try:
         if args.update:
@@ -408,7 +479,7 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
         download_error = None
         if args.download:
             try:
-                run_download(store, data_dir, settings)
+                run_download(store, data_dir, settings, args.threads)
             except CliError as exc:
                 if not args.meta:
                     raise

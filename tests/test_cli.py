@@ -300,6 +300,56 @@ def test_backend_with_own_output_gets_a_line_per_song(logged_in, fake_client, fa
     assert "Fake Artist - Song B: not found" in out
 
 
+def test_threads_flag_downloads_several_at_once(logged_in, fake_client, fake_backend, monkeypatch, capsys):
+    choose(monkeypatch, ["p1", "p2"])
+    cli.main(["-f"], data_dir=logged_in)
+    fake_backend.failing = {"Song B"}
+    fake_backend.song_warnings = {"Song A": ["lyrics not found"]}
+    assert cli.main(["-d", "-t", "3"], data_dir=logged_in) == 1
+    assert sorted(fake_backend.requested) == ["Song A", "Song B", "Song C"]
+    assert fake_backend.shown == [False, False, False]
+    out = capsys.readouterr().out
+    assert "Road Trip: Fake Artist - Song A: 1 downloaded; 0 errors; 1 warning" in out
+    assert "Road Trip: Fake Artist - Song B: 0 downloaded; 1 error; 0 warnings" in out
+    assert "Total: 2 downloaded, 1 failed, 0 already there." in out
+    logs = list((logged_in / "logs").glob("download-*.log"))
+    assert len(logs) == 1
+    assert "1 error and 1 warning were logged to" in out
+    text = logs[0].read_text(encoding="utf-8")
+    assert "Fake Artist - Song B\n    not found" in text and "lyrics not found" in text
+
+
+def test_threads_come_from_the_config(logged_in, fake_client, fake_backend, monkeypatch, tmp_path_factory):
+    path = tmp_path_factory.mktemp("cfg") / "spotarchive.toml"
+    path.write_text("[download]\nthreads = 2\n", encoding="utf-8")
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    assert cli.main(["-d", "-c", str(path)], data_dir=logged_in) == 0
+    assert fake_backend.shown == [False, False]
+    # --threads wins over the config.
+    fake_backend.shown.clear()
+    (logged_in / "Road Trip" / "YT Fake Artist - Song A.mp3").unlink()
+    assert cli.main(["-d", "-t", "1", "-c", str(path)], data_dir=logged_in) == 0
+    assert fake_backend.shown == [True]
+
+
+def test_one_thread_logs_too(logged_in, fake_client, fake_backend, monkeypatch, capsys):
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    fake_backend.failing = {"Song A"}
+    assert cli.main(["-d", "-t", "1"], data_dir=logged_in) == 1
+    [log] = (logged_in / "logs").glob("download-*.log")
+    assert "Fake Artist - Song A\n    not found" in log.read_text(encoding="utf-8")
+    assert str(log) in capsys.readouterr().out.replace("\n", "")
+
+
+@pytest.mark.parametrize("argv", [["-d", "-t", "0"], ["-d", "-t", "x"], ["-f", "-t", "2"], ["-u", "-t", "2"]])
+def test_bad_threads_flag(argv, logged_in):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(argv, data_dir=logged_in)
+    assert exc.value.code == 2
+
+
 def song_tags(path):
     import mutagen
 

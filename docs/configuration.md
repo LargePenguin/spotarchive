@@ -9,6 +9,7 @@ data_dir = "data"
 
 [download]
 backend = "somedl"
+threads = 0
 
 [metadata]
 source = "backend"
@@ -41,6 +42,7 @@ Moving `data_dir` doesn't move existing files: move the old folder's contents yo
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `backend` | `"somedl"` | The [download backend](backends.md) that sources the songs. Currently only `"somedl"`. |
+| `threads` | `0` | How many songs to [download at once](downloading.md#several-songs-at-once). `0`: half of the threads your CPU can run at once. `1`: [one at a time](downloading.md#one-song-at-a-time), showing the backend's own output. `spotarchive --threads N` (`-t N`) overrides it for one run. |
 
 ### `[metadata]`
 

@@ -12,6 +12,10 @@ data_dir = "data"
 [download]
 # Download helper that sources the songs. Available: "somedl".
 backend = "somedl"
+# How many songs to download at once. 0: half of the threads your CPU runs at
+# once. 1: one at a time, showing the helper's own output. Overridden by
+# `spotarchive --threads N` (-t N).
+threads = 0
 
 [metadata]
 # Where `spotarchive --meta` takes the songs' tags from:

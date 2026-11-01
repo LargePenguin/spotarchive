@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from typing import Callable
 
-from spotarchive.backends.base import BackendUnavailable, DownloadBackend, DownloadFailed, Song, TaggingFailed
+from spotarchive.backends.base import (
+    BackendUnavailable,
+    DownloadBackend,
+    DownloadEvents,
+    DownloadFailed,
+    Song,
+    TaggingFailed,
+)
 from spotarchive.backends.somedl import SomeDLBackend
 
 DEFAULT_BACKEND = "somedl"
@@ -17,6 +24,7 @@ __all__ = [
     "DEFAULT_BACKEND",
     "BackendUnavailable",
     "DownloadBackend",
+    "DownloadEvents",
     "DownloadFailed",
     "Song",
     "TaggingFailed",
