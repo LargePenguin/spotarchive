@@ -351,3 +351,41 @@ def test_steps_alone_skip_the_update_check(monkeypatch, tmp_path):
     monkeypatch.setattr(update, "latest_version", lambda **kw: pytest.fail("should not check"))
     monkeypatch.setattr(cli, "run_login", lambda store, *a: None)
     assert cli.main(["--login"], data_dir=tmp_path) == 0
+
+
+# --- Windows: pip can't overwrite the running spotarchive.exe -----------------
+
+
+@pytest.fixture
+def launcher(install, monkeypatch):
+    exe = install / "spotarchive.exe"
+    exe.write_text("old launcher")
+    monkeypatch.setattr(update, "_running_launcher", lambda: exe)
+    return exe
+
+
+def test_install_update_moves_running_launcher_aside_for_pip(install, launcher):
+    http = ArchiveHttp(make_zip("0.2.0", pyproject='[project]\ndependencies = ["new-dep"]\n'))
+    seen = []
+
+    def run(cmd, **kwargs):
+        seen.append((launcher.exists(), (launcher.parent / "spotarchive.exe.old").exists()))
+        launcher.write_text("new launcher")  # what pip does
+        return subprocess.CompletedProcess(cmd, 0)
+
+    update.install_update(install, run=run, http=http)
+    assert seen == [(False, True)]
+    assert launcher.read_text() == "new launcher"
+
+
+def test_install_update_restores_launcher_when_reinstall_fails(install, launcher):
+    http = ArchiveHttp(make_zip("0.2.0", pyproject='[project]\ndependencies = ["new-dep"]\n'))
+    with pytest.raises(update.UpdateError, match="reinstalling"):
+        update.install_update(install, run=RecordingRun(returncode=1), http=http)
+    assert launcher.read_text() == "old launcher"
+    assert not (launcher.parent / "spotarchive.exe.old").exists()
+
+
+def test_install_update_leaves_launcher_alone_without_reinstall(install, launcher):
+    update.install_update(install, run=RecordingRun(), http=ArchiveHttp(make_zip("0.2.0")))
+    assert launcher.read_text() == "old launcher"

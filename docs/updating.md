@@ -27,7 +27,7 @@ To skip the check, e.g. when you're offline, set the environment variable `SPOTA
 Spotarchive updates the checkout it runs from, which is what the [install script](quickstart.md#1-install) sets up. Git isn't needed. Updating:
 
 1. downloads the `main` branch of the repository from GitHub as a zip file and writes every file in it over the same file in the checkout;
-2. reinstalls the Python dependencies into the checkout's virtualenv, only if `pyproject.toml` changed. Installed extras (SomeDL, test dependencies) are kept. The install is editable, so the new code is used directly otherwise.
+2. reinstalls the Python dependencies into the checkout's virtualenv, only if `pyproject.toml` changed. Installed extras (SomeDL, test dependencies) are kept. The install is editable, so the new code is used directly otherwise. On Windows the running `spotarchive.exe` is renamed to `spotarchive.exe.old` first, because Windows won't let pip replace a program that is running (the leftover is deleted by the next update).
 
 Your data folder, login and settings (`spotarchive.toml`) aren't touched, since they aren't part of the repository. Files you changed by hand *are* overwritten, and files that were removed from the repository since your version are left behind (harmless).
 
