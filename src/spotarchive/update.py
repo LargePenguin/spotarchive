@@ -143,13 +143,66 @@ def install_update(root: Path, run=subprocess.run, http=requests) -> str:
     if pyproject.read_bytes() != before:
         extras = _installed_extras()
         target = f"{root}[{','.join(extras)}]" if extras else str(root)
-        if run([sys.executable, "-m", "pip", "install", "--editable", target]).returncode != 0:
+        launcher = _move_launcher_aside()
+        returncode = run([sys.executable, "-m", "pip", "install", "--editable", target]).returncode
+        if returncode != 0:
+            _restore_launcher(launcher)
             raise UpdateError(
                 "The code was updated, but reinstalling the dependencies failed. "
                 "Run the install script again to repair the install."
             )
 
     return read_version((root / VERSION_FILE).read_text(encoding="utf-8"))
+
+
+OLD_SUFFIX = ".old"
+
+
+def _running_launcher() -> Path | None:
+    """The ``spotarchive.exe`` this process was started from (Windows only), if it exists."""
+    if os.name != "nt":
+        return None
+    argv0 = Path(sys.argv[0]) if sys.argv and sys.argv[0] else None
+    candidates = []
+    if argv0 is not None and argv0.stem.lower() == "spotarchive":
+        candidates.append(argv0 if argv0.suffix.lower() == ".exe" else argv0.with_name(argv0.name + ".exe"))
+    candidates.append(Path(sys.executable).with_name("spotarchive.exe"))
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _move_launcher_aside() -> Path | None:
+    """Rename the running ``spotarchive.exe`` so pip can write a new one.
+
+    Windows refuses to overwrite or delete an executable that's running, but
+    renaming it is allowed. Returns the renamed file, or ``None`` if there was
+    nothing to move.
+    """
+    launcher = _running_launcher()
+    if launcher is None:
+        return None
+    moved = launcher.with_name(launcher.name + OLD_SUFFIX)
+    try:
+        moved.unlink(missing_ok=True)  # a leftover from an earlier update
+        launcher.rename(moved)
+    except OSError:
+        return None
+    return moved
+
+
+def _restore_launcher(moved: Path | None) -> None:
+    """Undo ``_move_launcher_aside`` after a failed reinstall, so the command still works."""
+    if moved is None:
+        return
+    original = moved.with_name(moved.name[: -len(OLD_SUFFIX)])
+    try:
+        if original.exists():
+            original.unlink()
+        moved.rename(original)
+    except OSError:
+        pass
 
 
 def _installed_extras() -> list[str]:
