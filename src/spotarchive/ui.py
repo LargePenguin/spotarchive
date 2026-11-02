@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sys
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 
 from rich.console import Console, Group
 from rich.live import Live
@@ -19,13 +21,24 @@ from spotarchive.spotify.models import Playlist
 console = Console(highlight=False)
 
 
+def _fancy_symbols() -> bool:
+    # Legacy Windows consoles (and non-UTF-8 terminals) can't draw these.
+    return not console.legacy_windows and console.encoding.lower().replace("-", "") == "utf8"
+
+
+def _symbols() -> tuple[str, str, str]:
+    """Check mark, cross and spinner name, with ASCII fallbacks for legacy consoles."""
+    if _fancy_symbols():
+        return "\u2714", "\u2718", "dots"
+    return "+", "x", "line"
+
+
 def info(message: str) -> None:
     console.print(f"[cyan]::[/] {escape(message)}")
 
 
-# Markers are ASCII so they render on legacy Windows consoles too.
 def ok(message: str) -> None:
-    console.print(f"[green]ok[/] {escape(message)}")
+    console.print(f"[green]{_symbols()[0]}[/] {escape(message)}")
 
 
 def warn(message: str) -> None:
@@ -33,7 +46,36 @@ def warn(message: str) -> None:
 
 
 def error(message: str) -> None:
-    console.print(f"[bold red]error:[/] {escape(message)}")
+    console.print(f"[bold red]{_symbols()[1]}[/] {escape(message)}")
+
+
+class Working:
+    """The spinner of :func:`working`; ``update`` changes its text."""
+
+    def __init__(self, status=None):
+        self._status = status
+
+    def update(self, message: str) -> None:
+        if self._status is None:
+            info(message)
+        else:
+            self._status.update(escape(message))
+
+
+@contextmanager
+def working(message: str) -> Iterator[Working]:
+    """A spinner with *message* while something runs, like the downloads' spinners.
+
+    It disappears when done, so follow it with :func:`ok` or :func:`error`.
+    Without a terminal there's nothing to animate; the message is printed as
+    :func:`info` instead, so the output still says what was going on.
+    """
+    if not console.is_terminal:
+        info(message)
+        yield Working()
+        return
+    with console.status(escape(message), spinner=_symbols()[2], spinner_style="cyan") as status:
+        yield Working(status)
 
 
 def can_prompt() -> bool:
@@ -81,11 +123,6 @@ def progress() -> Progress:
     )
 
 
-def _fancy_symbols() -> bool:
-    # Legacy Windows consoles (and non-UTF-8 terminals) can't draw these.
-    return not console.legacy_windows and console.encoding.lower().replace("-", "") == "utf8"
-
-
 def counts(downloaded: int, errors: int, warnings: int) -> str:
     """'1 downloaded; 0 errors; 2 warnings' as markup, each number colored when it isn't 0."""
     def part(n: int, color: str, one: str, many: str) -> str:
@@ -108,9 +145,7 @@ class DownloadBoard:
 
     def __init__(self, bar_width: int = 40):
         self.bar_width = bar_width
-        fancy = _fancy_symbols()
-        self._spinner = "dots" if fancy else "line"
-        self._ok, self._failed = ("\u2714", "\u2718") if fancy else ("+", "x")
+        self._ok, self._failed, self._spinner = _symbols()
         self._lock = threading.Lock()
         # key -> [spinner, progress (0..1) or None]
         self._running: dict[object, list] = {}

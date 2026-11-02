@@ -19,11 +19,13 @@ Plain `spotarchive` downloads too, right after fetching, and then [fixes the met
 Every playlist that is currently selected and has been fetched is processed. For each one, Spotarchive reads its `setlist.csv`, works out which songs are [already there](#skipping-songs-you-already-have) and asks the backend for the rest, [several songs at once](#several-songs-at-once) by default. At the end it sums up every playlist and the whole run:
 
 ```text
-ok Road Trip: 11 downloaded, 30 already there
-! Focus: 3 downloaded, 12 already there, 1 failed
-! Total: 14 downloaded, 1 failed, 42 already there.
+✔ Road Trip: 11 downloaded, 30 already there
+✘ Focus: 3 downloaded, 12 already there, 1 failed
+✘ Total: 14 downloaded, 1 failed, 42 already there.
 :: 1 error and 2 warnings were logged to data/logs/download-20260101-120000.log
 ```
+
+Everywhere in Spotarchive, a green check mark means something worked, a red cross means it failed, a yellow `!` is a warning and `::` is information; steps that take a while (logging in, loading your playlists, checking for updates) show a spinner until they're done.
 
 ### Several songs at once
 
@@ -40,7 +42,7 @@ Each song gets a line with a spinner while it downloads, and a progress bar unde
 ⠹ Road Trip: Fourth Artist - Fourth Song
 ```
 
-The playlist's name is left out when only one playlist is downloaded. Legacy Windows consoles get ASCII symbols (`+`, `x` and a `-\|/` spinner) instead.
+The playlist's name is left out when only one playlist is downloaded. Legacy Windows consoles get ASCII symbols (`+`, `x` and a `-\|/` spinner) instead, here and in all of Spotarchive's other output.
 
 More threads finish a big playlist sooner, but they also send more requests to YouTube Music and the metadata sites at once, which makes [rate limiting](#when-a-song-fails) more likely. Lower the number if many songs fail.
 

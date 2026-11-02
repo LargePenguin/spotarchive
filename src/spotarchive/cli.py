@@ -119,11 +119,12 @@ def _duration(seconds: float) -> str:
 
 
 def run_login(store: SessionStore) -> None:
-    ui.info("Opening a browser for the Spotify login...")
-    store.spotify = interactive_login(store.path.parent / BROWSER_PROFILE_DIRNAME, on_status=ui.info)
-    # Keep the login even if the next request fails (e.g. rate limiting).
-    store.save()
-    user = make_client(store).current_user()
+    with ui.working("Opening a browser for the Spotify login...") as status:
+        store.spotify = interactive_login(store.path.parent / BROWSER_PROFILE_DIRNAME, on_status=status.update)
+        # Keep the login even if the next request fails (e.g. rate limiting).
+        store.save()
+        status.update("Loading your Spotify profile...")
+        user = make_client(store).current_user()
     store.spotify.user_id = user.get("id")
     store.spotify.display_name = user.get("display_name") or user.get("id")
     store.save()
@@ -136,7 +137,8 @@ def ensure_login(store: SessionStore) -> None:
         run_login(store)
         return
     try:
-        make_client(store).current_user()
+        with ui.working("Checking the saved Spotify login..."):
+            make_client(store).current_user()
     except (RateLimited, QueryOutdated):
         # The login is fine; logging in again wouldn't help.
         raise
@@ -147,8 +149,8 @@ def ensure_login(store: SessionStore) -> None:
 
 def run_fetch(store: SessionStore, data_dir: Path, noselect: bool) -> None:
     client = make_client(store)
-    ui.info("Loading your playlists...")
-    playlists = client.playlists()
+    with ui.working("Loading your playlists..."):
+        playlists = client.playlists()
 
     if noselect:
         selected_ids = store.selected_ids()
@@ -236,13 +238,13 @@ def run_download(store: SessionStore, data_dir: Path, settings: Config, threads:
         failed_songs += len(result.failed)
         summary = f"{result.name}: {result.downloaded} downloaded, {result.already_present} already there"
         if result.failed:
-            ui.warn(f"{summary}, {len(result.failed)} failed")
+            ui.error(f"{summary}, {len(result.failed)} failed")
         else:
             ui.ok(summary)
     if playlists:
         downloaded = sum(p.downloaded for p in playlists)
         total = f"Total: {downloaded} downloaded, {failed_songs} failed"
-        (ui.warn if failed_songs else ui.ok)(f"{total}, {sum(p.already_present for p in playlists)} already there.")
+        (ui.error if failed_songs else ui.ok)(f"{total}, {sum(p.already_present for p in playlists)} already there.")
     if log.written:
         ui.info(f"{_plural(log.errors, 'error')} and {_plural(log.warnings, 'warning')} were logged to {log.path}")
 
@@ -275,7 +277,7 @@ class _OwnOutputListener(DownloadListener):
 
     def finished(self, job: SongDownload) -> None:
         if not job.ok:
-            ui.warn(f"{job.song.label}: {job.playlist.failed[-1][1]}")
+            ui.error(f"{job.song.label}: {job.playlist.failed[-1][1]}")
 
 
 class _ProgressListener(DownloadListener):
@@ -293,7 +295,8 @@ class _ProgressListener(DownloadListener):
     def finished(self, job: SongDownload) -> None:
         self.bar.advance(self._tasks[id(job.playlist)])
         if not job.ok:
-            self.bar.console.print(f"[yellow]![/] {ui.escape(job.song.label)}: {ui.escape(job.playlist.failed[-1][1])}")
+            # Printed above the progress bars.
+            ui.error(f"{job.song.label}: {job.playlist.failed[-1][1]}")
 
 
 class _BoardListener(DownloadListener):
@@ -343,7 +346,7 @@ def run_meta(store: SessionStore, data_dir: Path, settings: Config) -> None:
         failed_songs += len(result.failed)
         summary = f"{name}: {result.updated} fixed, {result.unchanged} already fine"
         if result.failed:
-            ui.warn(f"{summary}, {len(result.failed)} failed")
+            ui.error(f"{summary}, {len(result.failed)} failed")
         else:
             ui.ok(summary)
 
@@ -379,7 +382,8 @@ def _fix_with_progress(backend: DownloadBackend | None, name: str, folder: Path)
 
 def run_update() -> None:
     try:
-        latest = update.latest_version()
+        with ui.working("Checking for updates..."):
+            latest = update.latest_version()
     except update.UpdateError as exc:
         raise CliError(f"Couldn't check for updates: {exc}") from exc
     if not update.is_newer(latest, __version__):
@@ -395,6 +399,7 @@ def _install_update(latest: str) -> None:
             f"Spotarchive {latest} is available, but this install isn't an editable checkout, so it can't "
             f"update itself. Run the install script to update: {update.REPO_URL}#quick-start"
         )
+    # No spinner: pip's output would be drawn over it.
     ui.info(f"Updating Spotarchive {__version__} -> {latest} in {root}...")
     try:
         installed = update.install_update(root)
@@ -412,7 +417,8 @@ def check_for_update() -> bool:
     if update.skip_check_requested():
         return False
     try:
-        latest = update.latest_version(timeout=5)
+        with ui.working("Checking for updates..."):
+            latest = update.latest_version(timeout=5)
     except update.UpdateError as exc:
         ui.warn(f"Couldn't check for updates ({exc}); continuing.")
         return False
