@@ -25,7 +25,7 @@ Archiver for Spotify and YouTube Music: cache your playlists' metadata, then leg
 
 ## Features
 
-- Browser-based Spotify login
+- Browser-based Spotify login, plus an optional YouTube login for age-restricted songs
 - Per-playlist `setlist.csv` metadata caching
 - Pluggable download backend (default: [SomeDL](https://github.com/ChemistryGull/SomeDL))
 - Smart downloading that skips songs you already have, several songs at once

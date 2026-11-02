@@ -37,6 +37,12 @@ data_dir = "~/Music/spotarchive"
 
 Moving `data_dir` doesn't move existing files: move the old folder's contents yourself, or you'll have to log in and fetch again.
 
+### `[login]`
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `browser` | `""` | Browser for the [login windows](authentication.md#which-browser-is-used) (Spotify and YouTube): `"chrome"`, `"edge"`, `"brave"`, `"vivaldi"`, `"opera"` or `"chromium"` (case-insensitive). Empty: the first of Chrome, Edge and Playwright's bundled Chromium that is found. A named browser that isn't installed is an error, with no fallback. |
+
 ### `[download]`
 
 | Setting | Default | Meaning |
@@ -70,7 +76,7 @@ Switching `flat` or `audio_format` doesn't redownload anything: songs already th
 Spotarchive checks the file before doing anything and stops with a message naming the problem, for example:
 
 ```text
-error: /home/<your-username>/spotarchive/spotarchive.toml: unknown setting 'sorce' in metadata
+✘ /home/<your-username>/spotarchive/spotarchive.toml: unknown setting 'sorce' in metadata
 ```
 
 Misspelled settings are reported rather than ignored. A setting a backend doesn't know (in `[backends.somedl]`) is reported when that backend is first needed.

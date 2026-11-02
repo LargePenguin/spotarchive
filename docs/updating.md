@@ -18,7 +18,7 @@ Running plain `spotarchive` checks for updates before anything else (logging in,
 - If GitHub can't be reached, it prints a warning and continues.
 - If the input isn't an interactive terminal (e.g. a scheduled job), it never updates on its own. It tells you to run `spotarchive --update`.
 
-The single steps (`--login`, `--fetch`, `--download`) don't check for updates.
+The single steps (`--login`, `--fetch`, `--download`, `--meta`) don't check for updates.
 
 To skip the check, e.g. when you're offline, set the environment variable `SPOTARCHIVE_NO_UPDATE_CHECK=1`.
 

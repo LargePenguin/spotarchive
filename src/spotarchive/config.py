@@ -23,7 +23,7 @@ CONFIG_FILENAME = "spotarchive.toml"
 # Where the metadata cleanup takes the tags from.
 METADATA_SOURCES = ("backend", "setlist")
 
-_TOP_LEVEL = {"data_dir", "download", "metadata", "backends"}
+_TOP_LEVEL = {"data_dir", "login", "download", "metadata", "backends"}
 
 
 class ConfigError(Exception):
@@ -36,6 +36,8 @@ class Config:
     path: Path | None = None
     # Relative paths are relative to the current directory.
     data_dir: Path = DEFAULT_DATA_DIR
+    # Browser for the login window; "" = first of Chrome, Edge, bundled Chromium.
+    login_browser: str = ""
     backend: str = "somedl"
     # Songs downloaded at once; 0 means half of the CPU's threads.
     threads: int = 0
@@ -98,6 +100,20 @@ def parse(raw: dict, path: Path) -> Config:
     config = Config(path=path)
     if "data_dir" in raw:
         config.data_dir = Path(text(raw["data_dir"], "data_dir")).expanduser()
+    login = table(raw.get("login", {}), "login", {"browser"})
+    if "browser" in login:
+        if not isinstance(login["browser"], str):
+            raise fail("login.browser must be a string")
+        browser = login["browser"].strip().lower()
+        if browser:
+            from spotarchive.browser import NAMED_BROWSERS, canonical_browser
+
+            key = canonical_browser(browser)
+            if key is None:
+                names = ", ".join(map(repr, NAMED_BROWSERS))
+                raise fail(f"login.browser must be one of {names} (or empty), not {browser!r}")
+            browser = key
+        config.login_browser = browser
     download = table(raw.get("download", {}), "download", {"backend", "threads"})
     if "backend" in download:
         config.backend = text(download["backend"], "download.backend")

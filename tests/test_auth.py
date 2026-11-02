@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from spotarchive import browser
 from spotarchive.session import SessionStore, SpotifySession
 from spotarchive.spotify import auth
 from spotarchive.spotify.auth import (
@@ -141,9 +142,62 @@ def test_login_browser_is_not_automated(tmp_path):
     assert not any(arg.startswith("--disable-blink-features") for arg in cmd)
 
 
+def test_unwatched_login_window_has_no_debug_port(tmp_path):
+    # Any DevTools port turns navigator.webdriver on, which Google's sign-in refuses.
+    cmd = login_browser_command(Path("/fake/chrome"), tmp_path / "profile", LOGIN_URL, debug_port=False)
+    assert not any("remote-debugging" in arg or arg.startswith("--headless") for arg in cmd)
+    assert "--new-window" in cmd
+
+
+def test_headless_profile_reader_command(tmp_path):
+    cmd = login_browser_command(Path("/fake/chrome"), tmp_path / "profile", "about:blank", headless=True)
+    assert "--headless=new" in cmd and "--remote-debugging-port=0" in cmd
+    assert "--new-window" not in cmd
+    # Same cookie encryption settings as the window, so it can read its cookies.
+    assert "--password-store=basic" in cmd
+
+
+class OpenWindow:
+    def is_open(self):
+        return True
+
+
+def test_unwatched_window_left_open_times_out():
+    with pytest.raises(browser.LoginCancelled, match="still open"):
+        browser._wait_for_close(OpenWindow(), timeout_s=0)
+
+
 def test_installed_browsers_on_linux(tmp_path, monkeypatch):
     chrome = tmp_path / "google-chrome"
     chrome.write_text("")
-    monkeypatch.setattr(auth.os, "name", "posix")
-    monkeypatch.setattr(auth.shutil, "which", lambda name: str(chrome) if name == "google-chrome" else None)
+    monkeypatch.setattr(browser.os, "name", "posix")
+    monkeypatch.setattr(browser.shutil, "which", lambda name: str(chrome) if name == "google-chrome" else None)
     assert installed_browsers() == [chrome]
+
+
+class _FakePlaywright:
+    class chromium:
+        executable_path = "/nonexistent/chromium"
+
+
+def test_named_browser_is_used_or_reported_missing(tmp_path, monkeypatch):
+    brave = tmp_path / "brave-browser"
+    brave.write_text("")
+    monkeypatch.setattr(browser.os, "name", "posix")
+    monkeypatch.setattr(browser.shutil, "which", lambda name: str(brave) if name == "brave-browser" else None)
+    assert browser.login_browser(_FakePlaywright, "Brave") == brave
+    with pytest.raises(browser.BrowserUnavailable, match="edge"):
+        browser.login_browser(_FakePlaywright, "edge")
+    with pytest.raises(browser.BrowserUnavailable, match="Unknown"):
+        browser.login_browser(_FakePlaywright, "netscape")
+
+
+def test_flatpak_browser_is_found_and_launched(tmp_path, monkeypatch):
+    monkeypatch.setattr(browser.os, "name", "posix")
+    monkeypatch.setattr(browser.shutil, "which", lambda name: None)
+    monkeypatch.setattr(browser, "flatpak_installed", lambda app_id: app_id == "com.brave.Browser")
+    found = browser.login_browser(_FakePlaywright, "brave")
+    assert found == "flatpak:com.brave.Browser"
+    cmd = browser.login_browser_command(found, tmp_path / "profile", "https://example.com")
+    assert cmd[:4] == ["flatpak", "run", f"--filesystem={tmp_path / 'profile'}", "com.brave.Browser"]
+    assert f"--user-data-dir={tmp_path / 'profile'}" in cmd

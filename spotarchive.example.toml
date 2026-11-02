@@ -9,6 +9,12 @@
 # is relative to the folder you run spotarchive in.
 data_dir = "data"
 
+[login]
+# Browser for the Spotify login window: "chrome", "edge", "brave", "vivaldi",
+# "opera" or "chromium". Empty: the first of Chrome, Edge and Playwright's
+# bundled Chromium that is found.
+browser = ""
+
 [download]
 # Download helper that sources the songs. Available: "somedl".
 backend = "somedl"

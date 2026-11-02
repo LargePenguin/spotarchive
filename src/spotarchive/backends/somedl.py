@@ -6,6 +6,10 @@ files). Its output is parsed for progress, warnings and errors, and passed on
 to the terminal when downloading one song at a time. It searches YouTube
 Music for "Artist - Song" and tags the file with metadata it collects itself.
 
+With a YouTube login, its cookies are written to a private temporary
+``cookies.txt`` for each download and passed with ``--cookies``, which SomeDL
+hands to yt-dlp (so age-restricted videos download).
+
 Fixing a file's metadata goes through ``somedl import``, which only has an
 interactive wizard: its answers are piped in (written against SomeDL 1.7).
 """
@@ -19,7 +23,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from spotarchive.backends.base import (
     BackendUnavailable,
@@ -102,7 +108,7 @@ class SomeDLBackend(DownloadBackend):
             "See docs/backends.md#troubleshooting."
         ]
 
-    def command(self, song: Song) -> list[str]:
+    def command(self, song: Song, cookies: Path | None = None) -> list[str]:
         query = song_query(song)
         if query in _SUBCOMMANDS:
             raise DownloadFailed(f"can't search for {query!r} without an artist name")
@@ -114,20 +120,24 @@ class SomeDLBackend(DownloadBackend):
         cmd = [self.executable or "somedl", *where, "--skip-file-check"]
         if self.audio_format:
             cmd += ["--format", self.audio_format]
+        if cookies is not None:
+            cmd += ["--cookies", str(cookies)]
         # "--" so a query starting with "-" isn't read as an option.
         return [*cmd, *self.extra_args, "--", query]
 
     def download(self, song: Song, folder: Path, events: DownloadEvents | None = None) -> list[Path]:
         events = events or DownloadEvents()
-        cmd = self.command(song)
         # Each song downloads into its own hidden folder, so the new files are
         # simply what's in it, even with other songs downloading next to it.
         staging = Path(tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=folder))
         try:
-            try:
-                returncode, output = run_somedl(cmd, staging, events)
-            except OSError as exc:
-                raise DownloadFailed(f"couldn't run SomeDL: {exc}") from exc
+            # Its own cookie file too, so parallel downloads don't share one.
+            with self._cookie_file() as cookies:
+                cmd = self.command(song, cookies)
+                try:
+                    returncode, output = run_somedl(cmd, staging, events)
+                except OSError as exc:
+                    raise DownloadFailed(f"couldn't run SomeDL: {exc}") from exc
             new = [p for p in staging.rglob("*") if p.is_file() and p.suffix.lower() in self.audio_extensions]
             if returncode != 0:
                 raise DownloadFailed(f"SomeDL exited with code {returncode}{output.reason(' ({})')}")
@@ -139,6 +149,26 @@ class SomeDLBackend(DownloadBackend):
             return _move_into(staging, folder, new)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+
+    @contextmanager
+    def _cookie_file(self) -> Iterator[Path | None]:
+        """The YouTube login as a ``cookies.txt`` that lives for one SomeDL run.
+
+        A fresh file each time: yt-dlp writes the cookies back when it's
+        done, and the saved login stays the one the browser handed over.
+        """
+        if self.youtube_login is None:
+            yield None
+            return
+        # mkstemp creates the file readable only by the owner.
+        fd, name = tempfile.mkstemp(prefix="spotarchive-cookies-", suffix=".txt")
+        path = Path(name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                f.write(self.youtube_login.netscape_cookies())
+            yield path
+        finally:
+            path.unlink(missing_ok=True)
 
     def tag(self, song: Song, file: Path) -> None:
         # The wizard works on a whole folder and leaves its cache and an HTML

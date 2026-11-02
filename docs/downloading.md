@@ -110,10 +110,10 @@ It is updated after every song, so stopping a run with <kbd>Ctrl</kbd>+<kbd>C</k
 A song can fail when the backend can't find it or its download breaks. Failures are shown as they happen, the other songs carry on, and the run ends with an error that counts them:
 
 ```text
-error: 3 songs couldn't be downloaded; run `spotarchive --download` again to retry them.
+✘ 3 songs couldn't be downloaded; run `spotarchive --download` again to retry them.
 ```
 
-Failed songs aren't recorded, so the next `spotarchive --download` tries exactly those again (plus anything new). The [log file](#the-log-file) says why each one failed. For SomeDL error messages (HTTP 403, Deno, lyrics), see [troubleshooting SomeDL](backends.md#troubleshooting). Spotarchive exits with code `1` when any song or playlist failed, `130` when cancelled.
+Failed songs aren't recorded, so the next `spotarchive --download` tries exactly those again (plus anything new). The [log file](#the-log-file) says why each one failed. Songs YouTube marks as age-restricted only download with a [YouTube login](authentication.md#logging-in-to-youtube-optional): run `spotarchive --login youtube`, then download again. For SomeDL error messages (HTTP 403, Deno, lyrics), see [troubleshooting SomeDL](backends.md#troubleshooting). Spotarchive exits with code `1` when any song or playlist failed, `130` when cancelled.
 
 > [!TIP]
 > Downloading hundreds of songs quickly can get your IP temporarily blocked by YouTube. If that happens, wait a while and run `spotarchive --download` again; it picks up where it stopped.

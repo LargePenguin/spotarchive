@@ -87,3 +87,20 @@ def test_threads_default_to_half_the_cpu(monkeypatch):
 def test_threads_setting(tmp_path):
     settings = config.load(write(tmp_path, "[download]\nthreads = 3\n"))
     assert settings.threads == 3 and settings.download_threads() == 3
+
+
+def test_login_browser(tmp_path):
+    path = tmp_path / "spotarchive.toml"
+    path.write_text('[login]\nbrowser = " Brave "\n')
+    assert config.load(path).login_browser == "brave"
+    path.write_text('[login]\nbrowser = "msedge"\n')
+    assert config.load(path).login_browser == "edge"
+    path.write_text('[login]\nbrowser = ""\n')
+    assert config.load(path).login_browser == ""
+
+
+def test_login_browser_unknown(tmp_path):
+    path = tmp_path / "spotarchive.toml"
+    path.write_text('[login]\nbrowser = "firefox"\n')
+    with pytest.raises(ConfigError, match="login.browser"):
+        config.load(path)

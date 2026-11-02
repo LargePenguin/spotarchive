@@ -233,7 +233,7 @@ def login_reached(monkeypatch):
     """Records whether the run went on to the login step, then stops it there."""
     reached = []
 
-    def stop(store):
+    def stop(store, *a):
         reached.append(True)
         raise KeyboardInterrupt
 
@@ -349,5 +349,5 @@ def test_update_check_can_be_skipped(login_reached, monkeypatch, tmp_path):
 
 def test_steps_alone_skip_the_update_check(monkeypatch, tmp_path):
     monkeypatch.setattr(update, "latest_version", lambda **kw: pytest.fail("should not check"))
-    monkeypatch.setattr(cli, "run_login", lambda store: None)
+    monkeypatch.setattr(cli, "run_login", lambda store, *a: None)
     assert cli.main(["--login"], data_dir=tmp_path) == 0

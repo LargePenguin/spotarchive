@@ -1,6 +1,7 @@
-"""The SomeDL backend, with subprocess.run faked: SomeDL never actually runs."""
+"""The SomeDL backend, with subprocess.Popen and subprocess.run faked: SomeDL never actually runs."""
 
 import io
+import os
 import subprocess
 from pathlib import Path
 
@@ -8,6 +9,7 @@ import pytest
 
 from spotarchive.backends import BackendUnavailable, DownloadEvents, DownloadFailed, Song, TaggingFailed, get_backend, somedl
 from spotarchive.backends.somedl import SomeDLBackend
+from spotarchive.session import YouTubeSession
 
 SONG = Song("Song A", ("Fake Artist", "Other"))
 
@@ -138,6 +140,56 @@ def test_nonzero_exit_fails(tmp_path, run):
     with pytest.raises(DownloadFailed, match="code 2"):
         backend().download(SONG, tmp_path, Events())
     assert list(tmp_path.iterdir()) == []
+
+
+YOUTUBE = YouTubeSession(
+    cookies=[{"name": "SAPISID", "value": "dummy-cookie", "domain": ".youtube.com", "path": "/",
+              "expires": 4_000_000_000, "secure": True}],
+    user_agent="dummy-agent",
+)
+
+
+def test_command_without_youtube_login_passes_no_cookies():
+    assert "--cookies" not in backend().command(SONG)
+
+
+def test_youtube_login_is_passed_as_a_private_cookie_file(tmp_path, monkeypatch, run):
+    seen = {}
+
+    def fake_popen(cmd, **kw):
+        path = Path(cmd[cmd.index("--cookies") + 1])
+        seen["path"] = path
+        seen["text"] = path.read_text(encoding="utf-8")
+        seen["mode"] = path.stat().st_mode & 0o777
+        seen["before_query"] = cmd.index("--cookies") < cmd.index("--")
+        return run(cmd, **kw)
+
+    monkeypatch.setattr(somedl.subprocess, "Popen", fake_popen)
+    b = backend()
+    b.use_youtube_login(YOUTUBE)
+    b.download(SONG, tmp_path)
+
+    assert seen["text"] == YOUTUBE.netscape_cookies()
+    assert seen["before_query"]
+    if os.name == "posix":
+        assert seen["mode"] == 0o600
+    # Deleted once SomeDL is done.
+    assert not seen["path"].exists()
+
+
+def test_cookie_file_is_deleted_when_somedl_cant_run(tmp_path, monkeypatch):
+    paths = []
+
+    def boom(cmd, **kw):
+        paths.append(Path(cmd[cmd.index("--cookies") + 1]))
+        raise FileNotFoundError("no such file")
+
+    monkeypatch.setattr(somedl.subprocess, "Popen", boom)
+    b = backend()
+    b.use_youtube_login(YOUTUBE)
+    with pytest.raises(DownloadFailed):
+        b.download(SONG, tmp_path)
+    assert paths and not paths[0].exists()
 
 
 def test_unrunnable_program_fails(tmp_path, monkeypatch):
