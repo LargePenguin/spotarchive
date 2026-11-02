@@ -25,7 +25,7 @@ If SomeDL or FFmpeg is missing, `spotarchive --download` stops with a message sa
 
 ### How Spotarchive runs it
 
-SomeDL runs once per song, inside the playlist folder, as:
+SomeDL runs once per song, in a temporary folder inside the playlist folder (`.somedl-download-*`), as:
 
 ```bash
 somedl --here --skip-file-check -- "First Artist - Song Title"
@@ -41,7 +41,9 @@ With a [YouTube login](#youtube-login), `--cookies <file>` is added too.
 
 SomeDL also [fixes metadata](metadata.md#backend) for files it didn't download, through `somedl import`.
 
-SomeDL reports success even when a song couldn't be found, so Spotarchive decides by checking that a new audio file (`.mp3`, `.m4a`, `.opus`, `.ogg` or `.flac`) appeared in the folder.
+SomeDL reports success even when a song couldn't be found, so Spotarchive decides by checking that an audio file (`.mp3`, `.m4a`, `.opus`, `.ogg` or `.flac`) appeared in the temporary folder. Everything SomeDL wrote there is then moved into the playlist folder (keeping subfolders) and the temporary folder is removed. The temporary folder is what lets several songs download into the same playlist folder at once without mixing up their files.
+
+Spotarchive reads SomeDL's output as it arrives. Its `WARNING` and `ERROR` lines go to the [log file](downloading.md#the-log-file), and the last error (or warning) of a failed song becomes its failure reason. When [several songs download at once](downloading.md#several-songs-at-once) the output isn't shown. Spotarchive then makes SomeDL draw its live status table into the captured output anyway (through the `FORCE_COLOR` and `TTY_COMPATIBLE` variables of [Rich](https://github.com/Textualize/rich), the library SomeDL prints with), so that it can read the download percentage there for the progress bar. With [one thread](downloading.md#one-song-at-a-time) the output is passed on to your terminal unchanged.
 
 ### YouTube login
 
@@ -51,7 +53,7 @@ Without a YouTube login nothing changes: SomeDL uses its own cookie settings, if
 
 ### Troubleshooting
 
-SomeDL's own messages appear in between Spotarchive's. The common ones:
+With one thread, SomeDL's own messages appear in between Spotarchive's. With more they aren't shown, but its warnings and errors are in the [log file](downloading.md#the-log-file). The common ones:
 
 - **`yt-dlp needs Deno to work properly`**: Deno isn't installed where yt-dlp looks for it (SomeDL's environment, then your `PATH`). Spotarchive prints a similar warning before downloading. Re-run the [install script](quickstart.md#1-install), or `pip install "yt-dlp[default,deno]"` into the environment that has SomeDL.
 - **`unable to download video data: HTTP Error 403: Forbidden`**: YouTube refused the audio stream. This usually means Deno is missing (see above), so yt-dlp couldn't solve YouTube's challenge. Once Deno is installed, an occasional 403 can still happen. The song counts as failed, and the next `spotarchive --download` retries it. If 403s keep coming, update yt-dlp (`pip install -U "yt-dlp[default,deno]"`), since YouTube changes often, or wait a while in case your IP is being [rate limited](downloading.md#when-a-song-fails).
@@ -65,7 +67,9 @@ A backend is a subclass of `DownloadBackend` in [`src/spotarchive/backends/base.
 ```python
 from pathlib import Path
 
-from spotarchive.backends.base import BackendUnavailable, DownloadBackend, DownloadFailed, Song, TaggingFailed
+from spotarchive.backends.base import (
+    BackendUnavailable, DownloadBackend, DownloadEvents, DownloadFailed, Song, TaggingFailed,
+)
 from spotarchive.session import YouTubeSession
 
 
@@ -96,10 +100,16 @@ class ExampleBackend(DownloadBackend):
         # YouTube. The default stores it in self.youtube_login.
         super().use_youtube_login(login)
 
-    def download(self, song: Song, folder: Path) -> list[Path]:
+    def download(self, song: Song, folder: Path, events: DownloadEvents | None = None) -> list[Path]:
         # Download one song into `folder` and return the new audio files.
         # Raise DownloadFailed if nothing could be downloaded; the other
-        # songs are still tried.
+        # songs are still tried. Other songs may be downloading at the same
+        # time, from other threads. Report through `events` (all optional):
+        #   events.progress(0.42)    how far along, 0.0 to 1.0
+        #   events.warning("...")    something went wrong, but it carries on
+        #   events.error("...")      an error (still raise DownloadFailed if it failed)
+        # and only write to the terminal when events.show_output is true.
+        events = events or DownloadEvents()
         ...
 
     def tag(self, song: Song, file: Path) -> None:
@@ -116,11 +126,13 @@ What a backend gets and must do:
 - `download` is only called for songs that are missing. Spotarchive does the skipping and keeps the [download record](downloading.md#the-downloadsjson-record), so a backend doesn't need to remember anything between runs.
 - Return only the audio files created for this song, and only with an extension listed in `audio_extensions`: these are what the skip check looks for.
 - Put files in `folder`. Subfolders work too, as long as `download` returns the files' paths.
+- Several songs may download at once, each in its own thread (see [several songs at once](downloading.md#several-songs-at-once)), possibly into the same `folder`. So don't find a song's files by looking at what changed in `folder`: download into a temporary folder of your own and move the files over, as the SomeDL backend does (folders starting with `.` are ignored by the skip check). Don't share mutable state between calls without a lock.
+- Report progress, warnings and errors through `events` when the helper tells you about them: progress draws the song's progress bar, and warnings and errors go to the [log file](downloading.md#the-log-file) and the song's status line. The `DownloadFailed` message is logged as an error too, unless it's the same as the last `events.error`.
 - YouTube login: when the user has [logged in to YouTube](authentication.md#logging-in-to-youtube-optional) (and the login hasn't expired), `use_youtube_login` is called once before the first `download`; the default implementation keeps it in `self.youtube_login` (otherwise `None`). It holds `cookies` (youtube.com cookies as Playwright cookie dicts: `name`, `value`, `domain`, `path`, `expires` in seconds since the epoch or `-1`, `secure`, `httpOnly`) and the `user_agent` of the browser they came from. Pass them to your helper in whatever form it takes. For helpers built on yt-dlp, `login.netscape_cookies()` returns a `cookies.txt` for `--cookies`; see `SomeDLBackend._cookie_file` for writing it to a private temporary file. Never log the cookies or leave them on disk.
 - `tag` is used by [metadata cleanup](metadata.md#backend) with `source = "backend"`: for every song in the folder, unless `tags_downloads` is set and this backend downloaded it, or it was already tagged by it. It gets the setlist row and one file, and must leave the file where it is. Without `can_tag`, metadata cleanup falls back to the setlist.
 - Settings: each key of `[backends.<name>]` in the [configuration file](configuration.md#backendsname) is passed to the constructor as a keyword argument (empty strings are left out, so the default applies). Document them in `docs/configuration.md` and `spotarchive.example.toml`.
-- With `shows_own_output = True` the helper may write to the terminal; Spotarchive prints a `[n/total]` line before each song instead of drawing a progress bar.
+- With `shows_own_output = True` the helper may write to the terminal when `events.show_output` is true (one song at a time); Spotarchive then prints a `[n/total]` line before each song instead of drawing a progress bar. When `events.show_output` is false, capture the helper's output instead.
 
-Tests for a backend must not download real audio: fake the helper (see `tests/test_somedl.py`, which replaces `subprocess.run`).
+Tests for a backend must not download real audio: fake the helper (see `tests/test_somedl.py`, which replaces `subprocess.Popen` and `subprocess.run`).
 
 Back to the [documentation index](README.md).

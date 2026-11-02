@@ -7,6 +7,7 @@ place. See ``docs/configuration.md``.
 
 from __future__ import annotations
 
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -38,13 +39,23 @@ class Config:
     # Browser for the login window; "" = first of Chrome, Edge, bundled Chromium.
     login_browser: str = ""
     backend: str = "somedl"
+    # Songs downloaded at once; 0 means half of the CPU's threads.
+    threads: int = 0
     metadata_source: str = "backend"
     # Backend name -> keyword arguments for its constructor.
     backend_options: dict[str, dict] = field(default_factory=dict)
 
+    def download_threads(self) -> int:
+        return self.threads or default_threads()
+
     def options_for(self, backend: str) -> dict:
         # An empty string means "use the backend's default".
         return {k: v for k, v in self.backend_options.get(backend, {}).items() if v != ""}
+
+
+def default_threads() -> int:
+    """Half of the threads this computer's CPU runs at once, at least one."""
+    return max(1, (os.cpu_count() or 1) // 2)
 
 
 def default_path() -> Path:
@@ -103,9 +114,15 @@ def parse(raw: dict, path: Path) -> Config:
                 raise fail(f"login.browser must be one of {names} (or empty), not {browser!r}")
             browser = key
         config.login_browser = browser
-    download = table(raw.get("download", {}), "download", {"backend"})
+    download = table(raw.get("download", {}), "download", {"backend", "threads"})
     if "backend" in download:
         config.backend = text(download["backend"], "download.backend")
+    if "threads" in download:
+        threads = download["threads"]
+        # bool is an int in Python, but `threads = true` is a mistake.
+        if isinstance(threads, bool) or not isinstance(threads, int) or threads < 0:
+            raise fail("download.threads must be a whole number: 0 (half of the CPU threads) or more")
+        config.threads = threads
     metadata = table(raw.get("metadata", {}), "metadata", {"source"})
     if "source" in metadata:
         source = text(metadata["source"], "metadata.source")

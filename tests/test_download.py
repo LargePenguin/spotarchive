@@ -1,16 +1,21 @@
 import json
+import threading
 
 import pytest
 
 from spotarchive.backends import Song
 from spotarchive.download import (
     RECORD_FILENAME,
+    DownloadListener,
+    download_all,
     download_playlist,
+    prepare_playlist,
     expected_stems,
     find_present,
     load_record,
     setlist_songs,
 )
+from spotarchive.downloadlog import DownloadLog
 from spotarchive.setlist import write_setlist
 from spotarchive.spotify.models import Track
 
@@ -110,3 +115,92 @@ def test_corrupt_record_falls_back_to_file_names(folder, backend):
 def test_missing_setlist_raises(tmp_path, backend):
     with pytest.raises(FileNotFoundError):
         download_playlist(backend, "Nothing", tmp_path)
+
+
+class Recorder(DownloadListener):
+    def __init__(self):
+        self.events = []
+        self.lock = threading.Lock()
+
+    def _add(self, *event):
+        with self.lock:
+            self.events.append(event)
+
+    def started(self, job):
+        self._add("started", job.song.name)
+
+    def progress(self, job, fraction):
+        self._add("progress", job.song.name, fraction)
+
+    def warning(self, job, message):
+        self._add("warning", job.song.name, message)
+
+    def error(self, job, message):
+        self._add("error", job.song.name, message)
+
+    def finished(self, job):
+        assert threading.current_thread() is threading.main_thread()
+        self._add("finished", job.song.name, job.ok, len(job.errors), len(job.warnings))
+
+
+def test_several_threads_download_everything_and_record_it(folder, backend):
+    playlist = prepare_playlist(backend, "Road Trip", folder)
+    listener = Recorder()
+    download_all(backend, [playlist], threads=3, listener=listener)
+    assert sorted(backend.requested) == ["Song A", "Song B", "Song C"]
+    # With several at once the backend must keep its output to itself.
+    assert backend.shown == [False, False, False]
+    assert playlist.downloaded == 3
+    assert len(load_record(folder)) == 3
+    finished = sorted(e for e in listener.events if e[0] == "finished")
+    assert finished == [("finished", n, True, 0, 0) for n in ("Song A", "Song B", "Song C")]
+    assert ("progress", "Song A", 0.5) in listener.events
+
+
+def test_one_thread_lets_the_backend_show_its_output(folder, backend):
+    download_playlist(backend, "Road Trip", folder)
+    assert backend.shown == [True, True, True]
+
+
+def test_warnings_and_errors_are_logged_as_they_happen(folder, backend, tmp_path):
+    backend.failing = {"Song A"}
+    backend.song_warnings = {"Song B": ["lyrics not found"]}
+    log = DownloadLog(tmp_path / "logs" / "download.log")
+    seen_in_log = []
+
+    class Checker(Recorder):
+        def warning(self, job, message):
+            seen_in_log.append(log.path.read_text(encoding="utf-8"))
+
+    playlist = prepare_playlist(backend, "Road Trip", folder)
+    listener = Checker()
+    download_all(backend, [playlist], threads=2, listener=listener, log=log)
+    assert "lyrics not found" in seen_in_log[0]
+    text = log.path.read_text(encoding="utf-8")
+    assert "ERROR   Road Trip / Fake Artist - Song A\n    not found\n" in text
+    assert "WARNING Road Trip / First - Song B\n    lyrics not found\n" in text
+    assert (log.errors, log.warnings) == (1, 1)
+    assert [(s.name, e) for s, e in playlist.failed] == [("Song A", "not found")]
+    assert ("finished", "Song A", False, 1, 0) in listener.events
+    assert ("finished", "Song B", True, 0, 1) in listener.events
+
+
+def test_failure_already_reported_as_error_counts_once(folder, backend, tmp_path):
+    from spotarchive.backends import DownloadFailed
+
+    def download(song, folder, events=None):
+        events.error("HTTP 403")
+        raise DownloadFailed("HTTP 403")
+
+    backend.download = download
+    playlist = prepare_playlist(backend, "Road Trip", folder)
+    log = DownloadLog(tmp_path / "download.log")
+    download_all(backend, [playlist], threads=1, log=log)
+    assert log.errors == 3
+    assert playlist.failed[0][1] == "HTTP 403"
+
+
+def test_log_isnt_created_without_problems(folder, backend, tmp_path):
+    log = DownloadLog(tmp_path / "logs" / "download.log")
+    download_all(backend, [prepare_playlist(backend, "Road Trip", folder)], threads=2, log=log)
+    assert not log.written and not log.path.exists()

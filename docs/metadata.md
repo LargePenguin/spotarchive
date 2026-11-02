@@ -49,9 +49,9 @@ A progress bar runs per playlist, then a summary:
 ```text
 :: Fixing metadata with somedl...
 Road Trip ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 42/42
-! Example Artist - Example Song: SomeDL couldn't identify the song
-! Road Trip: 3 fixed, 38 already fine, 1 failed
-error: 1 songs' metadata couldn't be fixed.
+✘ Example Artist - Example Song: SomeDL couldn't identify the song
+✘ Road Trip: 3 fixed, 38 already fine, 1 failed
+✘ 1 songs' metadata couldn't be fixed.
 ```
 
 *Fixed* songs were retagged, *already fine* ones were left alone. Failed songs are tried again on the next run. Spotarchive exits with code `1` when any song or playlist failed.

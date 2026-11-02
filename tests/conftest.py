@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from spotarchive import config
-from spotarchive.backends import DownloadBackend, DownloadFailed, TaggingFailed
+from spotarchive.backends import DownloadBackend, DownloadEvents, DownloadFailed, TaggingFailed
 from spotarchive.spotify.client import PATHFINDER_URL
 
 
@@ -141,15 +141,24 @@ class FakeBackend(DownloadBackend):
         self.unavailable = unavailable
         self.can_tag = can_tag
         self.tags_downloads = tags_downloads
+        # Song name -> warnings to report while "downloading" it.
+        self.song_warnings: dict[str, list[str]] = {}
         self.requested = []
+        # events.show_output of every download.
+        self.shown = []
         self.tagged = []
 
     def check(self):
         if self.unavailable:
             raise self.unavailable
 
-    def download(self, song, folder):
+    def download(self, song, folder, events=None):
+        events = events or DownloadEvents()
         self.requested.append(song.name)
+        self.shown.append(events.show_output)
+        for warning in self.song_warnings.get(song.name, []):
+            events.warning(warning)
+        events.progress(0.5)
         if song.name in self.failing:
             raise DownloadFailed("not found")
         path = folder / f"YT {song.label}.mp3"
@@ -165,6 +174,12 @@ class FakeBackend(DownloadBackend):
 @pytest.fixture
 def backend():
     return FakeBackend()
+
+
+@pytest.fixture(autouse=True)
+def one_thread_by_default(monkeypatch):
+    # Downloads in a predictable order unless a test asks for more threads.
+    monkeypatch.setattr(config, "default_threads", lambda: 1)
 
 
 @pytest.fixture(autouse=True)
