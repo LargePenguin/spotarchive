@@ -47,7 +47,7 @@ If SomeDL or FFmpeg is missing, `spotarchive --download` stops with a message sa
 
 ### How Spotarchive runs it
 
-SomeDL runs once per song, in a temporary folder inside the playlist folder (`.somedl-download-*`), as:
+SomeDL runs once per song, in a temporary folder inside the playlist folder (`.sd-*`, a short name on purpose), as:
 
 ```bash
 somedl --here --skip-file-check -- "First Artist - Song Title"
@@ -64,6 +64,16 @@ With a [YouTube login](#youtube-login), `--cookies <file>` is added too.
 SomeDL also [fixes metadata](metadata.md#backend) for files it didn't download, through `somedl import`.
 
 SomeDL reports success even when a song couldn't be found, so Spotarchive decides by checking that an audio file (`.mp3`, `.m4a`, `.opus`, `.ogg` or `.flac`) appeared in the temporary folder. Everything SomeDL wrote there is then moved into the playlist folder (keeping subfolders) and the temporary folder is removed. The temporary folder is what lets several songs download into the same playlist folder at once without mixing up their files.
+
+#### Long file names and paths
+
+SomeDL names the file after the track it found, which can be very long ("Artist - Song (with ... ) (feat. ...)"). Windows allows only 260 characters for a whole path (and 255 for a file name, which most file systems share), and yt-dlp also writes `.part` files next to the final one. Spotarchive keeps within the limits like this, and every time it has to shorten something it says so in a warning (shown and written to the [log file](downloading.md#the-log-file)):
+
+- The temporary folder has a short name, to leave as much room as possible.
+- If yt-dlp still can't write its file because the path is too long, Spotarchive tries the song once more in your system's temporary folder, when that path is shorter, and moves the result back.
+- When the finished file is moved into the playlist folder, its name is cut to fit the path limit of your operating system, keeping the extension: `File name shortened to fit the path limit: "<old name>" -> "<new name>"`. Only the end of the title is lost; the file is still recognized as downloaded.
+
+If the playlist folder's own path leaves no room for a file name, or a shorter folder isn't available, the song fails with a "path too long" message. Moving the [`data_dir`](configuration.md#data_dir) closer to the root of the drive fixes it. Windows 10 and later can also [lift the 260 character limit](https://learn.microsoft.com/windows/win32/fileio/maximum-file-path-limitation).
 
 Spotarchive reads SomeDL's output as it arrives. Its `WARNING` and `ERROR` lines go to the [log file](downloading.md#the-log-file), and the last error (or warning) of a failed song becomes its failure reason. When [several songs download at once](downloading.md#several-songs-at-once) the output isn't shown. Spotarchive then makes SomeDL draw its live status table into the captured output anyway (through the `FORCE_COLOR` and `TTY_COMPATIBLE` variables of [Rich](https://github.com/Textualize/rich), the library SomeDL prints with), so that it can read the download percentage there for the progress bar. With [one thread](downloading.md#one-song-at-a-time) the output is passed on to your terminal unchanged.
 
