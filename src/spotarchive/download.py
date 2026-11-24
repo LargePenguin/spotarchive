@@ -7,6 +7,10 @@ this record is what lets later runs skip songs that are already there.
 
 Several songs can download at once (``threads``); the backend calls then run
 in worker threads, while the records are only written from the calling one.
+
+Wherever a backend is taken, a list of them may be given instead: a song is
+then tried with each in turn until one downloads it (the main backend, then
+the fallback), and the record notes which one did.
 """
 
 from __future__ import annotations
@@ -18,7 +22,7 @@ import tempfile
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence, Union
 
 from spotarchive.backends import DownloadBackend, DownloadEvents, DownloadFailed, Song
 from spotarchive.downloadlog import DownloadLog
@@ -29,6 +33,9 @@ RECORD_FILENAME = ".downloads.json"
 RECORD_VERSION = 1
 
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+# One backend, or several to try in turn.
+Backends = Union[DownloadBackend, Sequence[DownloadBackend]]
 
 # (song, position, number of songs to download)
 StartCallback = Callable[[Song, int, int], None]
@@ -60,6 +67,8 @@ class SongDownload:
     count: int
     # The new files, once downloaded; None while running or when it failed.
     files: list[Path] | None = None
+    # The backend that downloaded them.
+    backend: DownloadBackend | None = None
     warnings: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -82,6 +91,9 @@ class DownloadListener:
     def warning(self, job: SongDownload, message: str) -> None: ...
 
     def error(self, job: SongDownload, message: str) -> None: ...
+
+    def retrying(self, job: SongDownload, failed: DownloadBackend, reason: str, next: DownloadBackend) -> None:
+        """*failed* couldn't download the song; *next* tries it now."""
 
     def finished(self, job: SongDownload) -> None:
         """The song is done and recorded (``job.ok``) or failed; called from the calling thread."""
@@ -118,6 +130,16 @@ def save_record(folder: Path, songs: dict[str, dict]) -> None:
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+def as_chain(backends: Backends) -> list[DownloadBackend]:
+    """*backends* as a list, in the order to try them."""
+    return [backends] if isinstance(backends, DownloadBackend) else list(backends)
+
+
+def audio_extensions(backends: Backends) -> frozenset[str]:
+    """The file types any of *backends* produces."""
+    return frozenset().union(*(b.audio_extensions for b in as_chain(backends)))
 
 
 def setlist_songs(folder: Path) -> list[Song]:
@@ -183,7 +205,7 @@ def record_present(folder: Path, record: dict[str, dict], present: dict[str, lis
         save_record(folder, record)
 
 
-def prepare_playlist(backend: DownloadBackend, name: str, folder: Path) -> PlaylistDownload:
+def prepare_playlist(backend: Backends, name: str, folder: Path) -> PlaylistDownload:
     """Work out which songs of *folder*'s setlist still have to be downloaded.
 
     Songs found by file name are written to the record right away.
@@ -192,7 +214,7 @@ def prepare_playlist(backend: DownloadBackend, name: str, folder: Path) -> Playl
         raise FileNotFoundError(f"{folder / SETLIST_FILENAME} doesn't exist; fetch the playlist first.")
     songs = setlist_songs(folder)
     record = load_record(folder)
-    present = find_present(songs, folder, record, backend.audio_extensions)
+    present = find_present(songs, folder, record, audio_extensions(backend))
     record_present(folder, record, present)
     return PlaylistDownload(
         name, folder, total=len(songs), already_present=len(present),
@@ -201,24 +223,45 @@ def prepare_playlist(backend: DownloadBackend, name: str, folder: Path) -> Playl
 
 
 class _SongEvents(DownloadEvents):
-    """Passes what the backend reports for one song on to the log and the listener."""
+    """Passes what the backend reports for one song on to the log and the listener.
 
-    def __init__(self, job: SongDownload, listener: DownloadListener, log: DownloadLog | None, show_output: bool):
+    With a *prefix* (several backends to try) every message is marked with
+    it, and errors count as warnings: another backend may still download the
+    song, and if none does, one error sums up why.
+    """
+
+    def __init__(self, job: SongDownload, listener: DownloadListener, log: DownloadLog | None, show_output: bool,
+                 prefix: str = ""):
         super().__init__(show_output)
         self.job = job
         self.listener = listener
         self.log = log
+        self.prefix = prefix
+        # The last error the backend reported itself.
+        self.last_error: str | None = None
 
     def progress(self, fraction: float) -> None:
         self.listener.progress(self.job, max(0.0, min(fraction, 1.0)))
 
     def warning(self, message: str) -> None:
+        if self.prefix:
+            message = f"{self.prefix}: {message}"
+        self._warning(message)
+
+    def error(self, message: str) -> None:
+        self.last_error = message
+        if self.prefix:
+            self._warning(f"{self.prefix}: {message}")
+        else:
+            self._error(message)
+
+    def _warning(self, message: str) -> None:
         self.job.warnings.append(message)
         if self.log:
             self.log.warning(message, self.job.playlist.name, self.job.song.label)
         self.listener.warning(self.job, message)
 
-    def error(self, message: str) -> None:
+    def _error(self, message: str) -> None:
         self.job.errors.append(message)
         if self.log:
             self.log.error(message, self.job.playlist.name, self.job.song.label)
@@ -226,7 +269,7 @@ class _SongEvents(DownloadEvents):
 
 
 def download_all(
-    backend: DownloadBackend,
+    backend: Backends,
     playlists: list[PlaylistDownload],
     threads: int = 1,
     listener: DownloadListener | None = None,
@@ -234,8 +277,9 @@ def download_all(
 ) -> None:
     """Download the pending songs of *playlists*, *threads* songs at a time.
 
-    With one thread the backend may show its own output; with more it must
-    keep quiet. A song that fails is reported (and logged) and doesn't stop
+    *backend* may be several backends, tried in turn for every song. With
+    one thread the backend may show its own output; with more it must keep
+    quiet. A song that fails is reported (and logged) and doesn't stop
     the others. The record is saved after every song, so an interrupted run
     loses nothing.
     """
@@ -247,21 +291,34 @@ def download_all(
         for i, song in enumerate(playlist.pending, start=1)
     ]
 
+    chain = as_chain(backend)
+
     def work(job: SongDownload) -> SongDownload:
         listener.started(job)
-        events = _SongEvents(job, listener, log, show_output)
-        try:
-            job.files = backend.download(job.song, job.playlist.folder, events)
-        except DownloadFailed as exc:
-            reason = str(exc) or "download failed"
-            # The backend may already have reported it as an error.
-            if not job.errors or job.errors[-1] != reason:
-                events.error(reason)
+        failures: list[tuple[str, str]] = []
+        for i, candidate in enumerate(chain):
+            prefix = candidate.name if len(chain) > 1 else ""
+            events = _SongEvents(job, listener, log, show_output, prefix)
+            try:
+                job.files = candidate.download(job.song, job.playlist.folder, events)
+            except DownloadFailed as exc:
+                reason = str(exc) or "download failed"
+                # The backend may already have reported it as an error.
+                if events.last_error != reason:
+                    events.error(reason)
+                failures.append((candidate.name, reason))
+                if i + 1 < len(chain):
+                    listener.retrying(job, candidate, reason, chain[i + 1])
+                continue
+            job.backend = candidate
+            return job
+        if len(chain) > 1:
+            events._error("; ".join(f"{name}: {reason}" for name, reason in failures))
         return job
 
     if threads <= 1:
         for job in jobs:
-            _finish(backend, work(job), listener)
+            _finish(work(job), listener)
         return
 
     pool = ThreadPoolExecutor(max_workers=threads, thread_name_prefix="download")
@@ -271,19 +328,19 @@ def download_all(
             # A timeout so Ctrl+C gets through on Windows too.
             done, running = wait(running, timeout=0.2, return_when=FIRST_COMPLETED)
             for future in done:
-                _finish(backend, future.result(), listener)
+                _finish(future.result(), listener)
     finally:
         pool.shutdown(wait=True, cancel_futures=True)
 
 
-def _finish(backend: DownloadBackend, job: SongDownload, listener: DownloadListener) -> None:
+def _finish(job: SongDownload, listener: DownloadListener) -> None:
     playlist = job.playlist
     if job.files is None:
         playlist.failed.append((job.song, job.errors[-1] if job.errors else "download failed"))
     else:
         playlist.record[job.song.key] = {
             "label": job.song.label,
-            "backend": backend.name,
+            "backend": job.backend.name,
             "files": [p.relative_to(playlist.folder).as_posix() for p in job.files],
         }
         save_record(playlist.folder, playlist.record)
@@ -304,7 +361,7 @@ class _CallbackListener(DownloadListener):
 
 
 def download_playlist(
-    backend: DownloadBackend,
+    backend: Backends,
     name: str,
     folder: Path,
     on_start: StartCallback = lambda song, i, n: None,

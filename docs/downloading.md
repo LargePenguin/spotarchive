@@ -1,6 +1,6 @@
 # Downloading
 
-Downloading turns the `setlist.csv` of every selected playlist into audio files in that playlist's folder. Spotarchive never takes audio from Spotify: the songs are sourced by a [download backend](backends.md), [SomeDL](https://github.com/ChemistryGull/SomeDL) by default, which finds them on YouTube Music.
+Downloading turns the `setlist.csv` of every selected playlist into audio files in that playlist's folder. Spotarchive never takes audio from Spotify: the songs are sourced by a [download backend](backends.md), [SomeDL](https://github.com/ChemistryGull/SomeDL) by default, which finds them on YouTube Music. Songs SomeDL can't download are tried again with the [fallback backend](backends.md#fallback-backend), [yt-dlp](https://github.com/yt-dlp/yt-dlp) by default, which searches all of YouTube.
 
 ```bash
 spotarchive --download     # download what's missing from the fetched setlists
@@ -12,7 +12,7 @@ spotarchive -d -t 1        # one song at a time, showing SomeDL's own output
 
 You need to have [fetched](fetching.md) the playlists first, and the backend has to be installed (see [SomeDL](backends.md#somedl)). Downloading itself doesn't talk to Spotify, so it works without a login once the setlists exist.
 
-Plain `spotarchive` downloads too, right after fetching, and then [fixes the metadata](metadata.md). The backend and its settings (audio format, folder structure) are set in the [configuration file](configuration.md#backendsname).
+Plain `spotarchive` downloads too, right after fetching, and then [fixes the metadata](metadata.md). The backend, the fallback and their settings (audio format, folder structure) are set in the [configuration file](configuration.md#download).
 
 ## What gets downloaded
 
@@ -87,7 +87,7 @@ Songs removed from a Spotify playlist are not deleted from its folder.
 
 ### The `.downloads.json` record
 
-Because backends name files after what *they* found, the file name alone can't always tell which setlist row a file belongs to. Each playlist folder therefore keeps a small record, `.downloads.json`, mapping every downloaded song (by its Spotify link) to its files and, once its [metadata was fixed](metadata.md#what-gets-recorded), who tagged it:
+Because backends name files after what *they* found, the file name alone can't always tell which setlist row a file belongs to. Each playlist folder therefore keeps a small record, `.downloads.json`, mapping every downloaded song (by its Spotify link) to the backend that downloaded it, its files and, once its [metadata was fixed](metadata.md#what-gets-recorded), who tagged it:
 
 ```json
 {
@@ -107,7 +107,7 @@ It is updated after every song, so stopping a run with <kbd>Ctrl</kbd>+<kbd>C</k
 
 ## When a song fails
 
-A song can fail when the backend can't find it or its download breaks. Failures are shown as they happen, the other songs carry on, and the run ends with an error that counts them:
+A song can fail when the backend can't find it or its download breaks. With a [fallback backend](backends.md#fallback-backend) it is first tried again with that one (with one thread you see a `! ... somedl couldn't download it (...); trying ytdlp` line), and only fails if the fallback can't download it either. Failures are shown as they happen, the other songs carry on, and the run ends with an error that counts them:
 
 ```text
 ✘ 3 songs couldn't be downloaded; run `spotarchive --download` again to retry them.
@@ -129,6 +129,6 @@ Every warning and error of a download run is written to a log file as soon as it
     Song could not be downloaded, error on metadata fetching.
 ```
 
-With SomeDL, the warnings and errors are the `WARNING` and `ERROR` lines it prints (consecutive error lines, like yt-dlp's, become one entry). When a song fails, the reason is logged as an error too. Problems that aren't about one song, like a missing Deno, are logged with `-` instead of a song. Old log files are never deleted; remove them when you no longer need them.
+With SomeDL, the warnings and errors are the `WARNING` and `ERROR` lines it prints (consecutive error lines, like yt-dlp's, become one entry); with yt-dlp, its `WARNING:` and `ERROR:` lines. When a song fails, the reason is logged as an error too. With a [fallback backend](backends.md#fallback-backend), each backend's messages start with its name (`somedl: ...`) and are logged as warnings, since the next backend may still download the song; if none does, one error lists every backend's reason. Problems that aren't about one song, like a missing Deno, are logged with `-` instead of a song. Old log files are never deleted; remove them when you no longer need them.
 
 Back to the [documentation index](README.md).

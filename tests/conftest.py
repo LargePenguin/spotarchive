@@ -136,7 +136,8 @@ class FakeBackend(DownloadBackend):
     name = "fake"
     audio_extensions = frozenset({".mp3"})
 
-    def __init__(self, failing=(), unavailable=None, can_tag=False, tags_downloads=False):
+    def __init__(self, failing=(), unavailable=None, can_tag=False, tags_downloads=False, name="fake"):
+        self.name = name
         self.failing = set(failing)
         self.unavailable = unavailable
         self.can_tag = can_tag
@@ -161,7 +162,7 @@ class FakeBackend(DownloadBackend):
         events.progress(0.5)
         if song.name in self.failing:
             raise DownloadFailed("not found")
-        path = folder / f"YT {song.label}.mp3"
+        path = folder / f"YT {song.label}.mp3" if self.name == "fake" else folder / f"{self.name} {song.label}.mp3"
         path.write_bytes(SILENT_MP3)
         return [path]
 
@@ -187,3 +188,12 @@ def no_user_config(tmp_path_factory, monkeypatch):
     # Never read the developer's own spotarchive.toml.
     missing = tmp_path_factory.mktemp("config") / config.CONFIG_FILENAME
     monkeypatch.setattr(config, "default_path", lambda: missing)
+
+
+@pytest.fixture(autouse=True)
+def no_fallback(monkeypatch):
+    # The default config has a fallback backend (yt-dlp); tests never run a
+    # real one. A test that wants one replaces cli.make_fallback itself.
+    from spotarchive import cli
+
+    monkeypatch.setattr(cli, "make_fallback", lambda settings: None)

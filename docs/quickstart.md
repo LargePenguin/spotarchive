@@ -5,7 +5,7 @@
 
 ## Legal note
 
-Spotarchive never acquires music from Spotify. The only data taken from Spotify is information about the contents of your playlists. Audio is sourced through a download backend of your choice (currently only SomeDL is implemented; please feel free to request/implement other backends and open a PR)
+Spotarchive never acquires music from Spotify. The only data taken from Spotify is information about the contents of your playlists. Audio is sourced through a download backend of your choice (currently SomeDL, with yt-dlp as the fallback; please feel free to request/implement other backends and open a PR)
 
 ## Requirements
 

@@ -37,6 +37,7 @@ class FakeClient:
 
 
 REAL_MAKE_BACKEND = cli.make_backend
+REAL_MAKE_FALLBACK = cli.make_fallback
 PLAYLISTS = [Playlist("p1", "Road Trip", total=2), Playlist("p2", "Focus/Work", total=1)]
 TRACKS = {"p1": [Track("Song A", ["Fake Artist"]), Track("Song B", ["Fake Artist"])], "p2": [Track("Song C")]}
 
@@ -388,6 +389,68 @@ def test_meta_still_runs_when_a_download_failed(logged_in, fake_client, fake_bac
     fake_backend.failing = {"Song A"}
     assert cli.main(["-dm"], data_dir=logged_in) == 1
     assert "Road Trip: 1 fixed" in capsys.readouterr().out
+
+
+@pytest.fixture
+def spare(monkeypatch):
+    from conftest import FakeBackend
+
+    spare = FakeBackend(name="spare")
+    monkeypatch.setattr(cli, "make_fallback", lambda settings: spare)
+    return spare
+
+
+def test_fallback_downloads_what_the_backend_cant(logged_in, fake_client, fake_backend, spare, monkeypatch, capsys):
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    fake_backend.shows_own_output = spare.shows_own_output = True
+    fake_backend.failing = {"Song B"}
+    store = SessionStore.load(logged_in)
+    store.youtube = youtube_session()
+    store.save()
+
+    assert cli.main(["-d"], data_dir=logged_in) == 0
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert spare.requested == ["Song B"]
+    assert "Songs fake can't download are tried with spare." in out
+    assert "Fake Artist - Song B: fake couldn't download it (not found); trying spare" in out
+    assert "Road Trip: 2 downloaded" in out
+    assert spare.youtube_login == fake_backend.youtube_login == youtube_session()
+
+
+def test_unavailable_fallback_only_warns(logged_in, fake_client, fake_backend, spare, monkeypatch, capsys):
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    spare.unavailable = BackendUnavailable("yt-dlp isn't installed.")
+    fake_backend.failing = {"Song B"}
+
+    assert cli.main(["-d"], data_dir=logged_in) == 1
+
+    out = " ".join(capsys.readouterr().out.split())
+    assert "The fallback backend ytdlp can't be used, so it's left out: yt-dlp isn't installed." in out
+    assert spare.requested == []
+    assert fake_backend.requested == ["Song A", "Song B"]
+
+
+def test_meta_tags_with_the_fallback_what_it_downloaded(logged_in, fake_client, fake_backend, spare, monkeypatch):
+    fake_backend.can_tag = spare.can_tag = True
+    fake_backend.failing = {"Song B"}
+    choose(monkeypatch, ["p1"])
+    cli.main(["-fd"], data_dir=logged_in)
+    fake_backend.failing = set()
+
+    assert cli.main(["-m"], data_dir=logged_in) == 0
+
+    assert fake_backend.tagged == ["YT Fake Artist - Song A.mp3"]
+    assert spare.tagged == ["spare Fake Artist - Song B.mp3"]
+
+
+def test_bad_fallback_option_fails(tmp_path):
+    settings = cli.Config(path=tmp_path / "spotarchive.toml", backend_options={"ytdlp": {"audio_format": "mp4"}})
+    with pytest.raises(cli.ConfigError, match=r"\[backends.ytdlp\].*audio_format"):
+        REAL_MAKE_FALLBACK(settings)
+    assert REAL_MAKE_FALLBACK(cli.Config(fallback="")) is None
 
 
 def test_meta_before_fetch_fails(logged_in):

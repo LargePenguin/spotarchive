@@ -5,6 +5,7 @@ import pytest
 from spotarchive import config
 from spotarchive.backends import get_backend
 from spotarchive.backends.somedl import SomeDLBackend
+from spotarchive.backends.ytdlp import YtDlpBackend
 from spotarchive.config import Config, ConfigError
 
 # Before the autouse fixture in conftest.py pins it to 1.
@@ -33,9 +34,12 @@ def test_example_file_matches_the_defaults():
     settings = config.load(EXAMPLE)
     assert (settings.data_dir, settings.backend, settings.metadata_source, settings.threads) == (
         Config.data_dir, Config.backend, Config.metadata_source, Config.threads)
+    assert settings.fallback == Config.fallback
     backend = get_backend(settings.backend, **settings.options_for(settings.backend))
     default = SomeDLBackend()
     assert vars(backend) == vars(default)
+    fallback = get_backend(settings.fallback, **settings.options_for(settings.fallback))
+    assert vars(fallback) == vars(YtDlpBackend())
 
 
 def test_reads_every_setting(tmp_path):
@@ -68,6 +72,8 @@ extra_args = ["--sleep", "5"]
     ("[download]\nthreads = 'four'", "download.threads must be a whole number"),
     ("[download]\nthreads = true", "download.threads must be a whole number"),
     ("[backends]\nsomedl = 1", "backends.somedl must be a table"),
+    ("[download]\nfallback = 1", "download.fallback must be a string"),
+    ("[download]\nfallback = 'somedl'", "download.fallback must be another backend"),
 ])
 def test_bad_files(tmp_path, text, message):
     with pytest.raises(ConfigError, match=message):
@@ -104,3 +110,11 @@ def test_login_browser_unknown(tmp_path):
     path.write_text('[login]\nbrowser = "firefox"\n')
     with pytest.raises(ConfigError, match="login.browser"):
         config.load(path)
+
+
+def test_fallback(tmp_path):
+    assert config.load(write(tmp_path, "[download]\nfallback = ''")).fallback == ""
+    settings = config.load(write(tmp_path, "[download]\nbackend = 'ytdlp'\nfallback = 'somedl'"))
+    assert (settings.backend, settings.fallback) == ("ytdlp", "somedl")
+    # Only the backend set to the default fallback: no fallback, not an error.
+    assert config.load(write(tmp_path, "[download]\nbackend = 'ytdlp'")).fallback == ""
