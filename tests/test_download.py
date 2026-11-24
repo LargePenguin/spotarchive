@@ -3,6 +3,7 @@ import threading
 
 import pytest
 
+from conftest import FakeBackend
 from spotarchive.backends import Song
 from spotarchive.download import (
     RECORD_FILENAME,
@@ -204,3 +205,55 @@ def test_log_isnt_created_without_problems(folder, backend, tmp_path):
     log = DownloadLog(tmp_path / "logs" / "download.log")
     download_all(backend, [prepare_playlist(backend, "Road Trip", folder)], threads=2, log=log)
     assert not log.written and not log.path.exists()
+
+
+def test_fallback_downloads_what_the_main_backend_cant(folder, tmp_path):
+    main = FakeBackend(failing={"Song A"}, name="main")
+    fallback = FakeBackend(name="spare")
+    retries = []
+
+    class Retries(Recorder):
+        def retrying(self, job, failed, reason, next):
+            retries.append((job.song.name, failed.name, reason, next.name))
+
+    log = DownloadLog(tmp_path / "logs" / "download.log")
+    playlist = prepare_playlist([main, fallback], "Road Trip", folder)
+    listener = Retries()
+    download_all([main, fallback], [playlist], threads=1, listener=listener, log=log)
+
+    assert main.requested == ["Song A", "Song B", "Song C"]
+    assert fallback.requested == ["Song A"]
+    assert retries == [("Song A", "main", "not found", "spare")]
+    assert playlist.downloaded == 3 and not playlist.failed
+    record = load_record(folder)
+    assert record["https://example.com/Song A"]["backend"] == "spare"
+    assert record["https://example.com/Song B"]["backend"] == "main"
+    # The main backend's error is only a warning: the song got downloaded.
+    assert ("finished", "Song A", True, 0, 1) in listener.events
+    assert (log.errors, log.warnings) == (0, 1)
+    assert "main: not found" in log.path.read_text(encoding="utf-8")
+
+
+def test_song_no_backend_finds_fails_with_every_reason(folder, tmp_path):
+    main = FakeBackend(failing={"Song A"}, name="main")
+    fallback = FakeBackend(failing={"Song A"}, name="spare")
+    fallback.song_warnings = {"Song A": ["slow"]}
+    log = DownloadLog(tmp_path / "download.log")
+    playlist = prepare_playlist([main, fallback], "Road Trip", folder)
+    listener = Recorder()
+    download_all([main, fallback], [playlist], threads=2, listener=listener, log=log)
+
+    assert [(s.name, e) for s, e in playlist.failed] == [("Song A", "main: not found; spare: not found")]
+    assert ("warning", "Song A", "spare: slow") in listener.events
+    # One error for the song, the backends' own as warnings.
+    assert ("finished", "Song A", False, 1, 3) in listener.events
+    assert "https://example.com/Song A" not in load_record(folder)
+
+
+def test_files_of_either_backend_count_as_present(folder):
+    main = FakeBackend(name="main")
+    other = FakeBackend(name="spare")
+    other.audio_extensions = frozenset({".opus"})
+    (folder / "Fake Artist - Song A.opus").write_bytes(b"audio")
+    assert prepare_playlist(main, "Road Trip", folder).already_present == 0
+    assert prepare_playlist([main, other], "Road Trip", folder).already_present == 1

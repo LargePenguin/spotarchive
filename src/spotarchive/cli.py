@@ -283,12 +283,37 @@ def run_fetch(store: SessionStore, data_dir: Path, noselect: bool) -> None:
         raise CliError(f"{failed} of {len(results)} playlists couldn't be fetched.")
 
 
-def make_backend(settings: Config) -> DownloadBackend:
+def _build_backend(settings: Config, name: str) -> DownloadBackend:
     try:
-        return get_backend(settings.backend, **settings.options_for(settings.backend))
-    except TypeError as exc:
-        # An option the backend doesn't take.
-        raise ConfigError(f"{settings.path}: bad setting in [backends.{settings.backend}]: {exc}") from exc
+        return get_backend(name, **settings.options_for(name))
+    except (TypeError, ValueError) as exc:
+        # An option the backend doesn't take, or a bad value.
+        raise ConfigError(f"{settings.path}: bad setting in [backends.{name}]: {exc}") from exc
+
+
+def make_backend(settings: Config) -> DownloadBackend:
+    """The main download backend."""
+    return _build_backend(settings, settings.backend)
+
+
+def make_fallback(settings: Config) -> DownloadBackend | None:
+    """The backend for the songs the main one can't download, if one is configured."""
+    return _build_backend(settings, settings.fallback) if settings.fallback else None
+
+
+def _usable_fallback(settings: Config, log: DownloadLog | None = None) -> DownloadBackend | None:
+    """The fallback backend if it can run; a warning (not an error) when it can't."""
+    try:
+        fallback = make_fallback(settings)
+        if fallback is not None:
+            fallback.check()
+        return fallback
+    except BackendUnavailable as exc:
+        message = f"The fallback backend {settings.fallback} can't be used, so it's left out: {exc}"
+        ui.warn(message)
+        if log:
+            log.warning(message)
+        return None
 
 
 def run_download(store: SessionStore, data_dir: Path, settings: Config, threads: int | None = None) -> None:
@@ -299,11 +324,19 @@ def run_download(store: SessionStore, data_dir: Path, settings: Config, threads:
     backend = make_backend(settings)
     backend.check()
     log = DownloadLog.for_run(data_dir)
-    for warning in backend.warnings():
-        ui.warn(warning)
-        log.warning(warning)
+    fallback = _usable_fallback(settings, log)
+    # Every song is tried with these in turn.
+    backends = [backend] if fallback is None else [backend, fallback]
+    shown = set()
+    for warning in (w for b in backends for w in b.warnings()):
+        # Both run yt-dlp, so they may warn the same.
+        if warning not in shown:
+            shown.add(warning)
+            ui.warn(warning)
+            log.warning(warning)
     if youtube_auth.is_logged_in(store.youtube):
-        backend.use_youtube_login(store.youtube)
+        for b in backends:
+            b.use_youtube_login(store.youtube)
     elif store.youtube is not None:
         expired = (
             "The saved YouTube login has expired, so age-restricted songs may fail; "
@@ -316,23 +349,25 @@ def run_download(store: SessionStore, data_dir: Path, settings: Config, threads:
     playlists, unfetched = [], 0
     for name, folder in folders:
         try:
-            playlists.append(prepare_playlist(backend, name, folder))
+            playlists.append(prepare_playlist(backends, name, folder))
         except FileNotFoundError as exc:
             unfetched += 1
             ui.error(f"{name}: {exc}")
             log.error(str(exc), name)
     pending = sum(len(p.pending) for p in playlists)
 
+    if fallback is not None and pending:
+        ui.info(f"Songs {backend.name} can't download are tried with {fallback.name}.")
     if threads > 1:
         if pending:
             ui.info(f"Downloading {pending} songs, up to {min(threads, pending)} at a time...")
         with ui.DownloadBoard() as board:
-            download_all(backend, playlists, threads, _BoardListener(board, len(playlists) > 1), log)
-    elif backend.shows_own_output:
-        download_all(backend, playlists, 1, _OwnOutputListener(), log)
+            download_all(backends, playlists, threads, _BoardListener(board, len(playlists) > 1), log)
+    elif all(b.shows_own_output for b in backends):
+        download_all(backends, playlists, 1, _OwnOutputListener(), log)
     else:
         with ui.progress() as bar:
-            download_all(backend, playlists, 1, _ProgressListener(bar), log)
+            download_all(backends, playlists, 1, _ProgressListener(bar), log)
 
     failed_songs = 0
     for result in playlists:
@@ -376,6 +411,9 @@ class _OwnOutputListener(DownloadListener):
             ui.info(f"{job.playlist.name}: {job.count} songs to download")
         ui.info(f"[{job.position}/{job.count}] {job.song.label}")
 
+    def retrying(self, job: SongDownload, failed: DownloadBackend, reason: str, next: DownloadBackend) -> None:
+        ui.warn(f"{job.song.label}: {failed.name} couldn't download it ({reason}); trying {next.name}")
+
     def finished(self, job: SongDownload) -> None:
         if not job.ok:
             ui.error(f"{job.song.label}: {job.playlist.failed[-1][1]}")
@@ -392,6 +430,9 @@ class _ProgressListener(DownloadListener):
         key = id(job.playlist)
         if key not in self._tasks:
             self._tasks[key] = self.bar.add_task(job.playlist.name, total=job.count)
+
+    def retrying(self, job: SongDownload, failed: DownloadBackend, reason: str, next: DownloadBackend) -> None:
+        ui.warn(f"{job.song.label}: {failed.name} couldn't download it ({reason}); trying {next.name}")
 
     def finished(self, job: SongDownload) -> None:
         self.bar.advance(self._tasks[id(job.playlist)])
@@ -424,22 +465,27 @@ def run_meta(store: SessionStore, data_dir: Path, settings: Config) -> None:
     folders = selected_folders(store, data_dir)
     if not folders:
         raise CliError("No playlists have been fetched yet; run `spotarchive --fetch` first.")
-    backend = None
+    backends: list[DownloadBackend] = []
     if settings.metadata_source == "backend":
         backend = make_backend(settings)
         if backend.can_tag:
             backend.check()
-            ui.info(f"Fixing metadata with {backend.name}...")
+            backends.append(backend)
+        fallback = _usable_fallback(settings)
+        if fallback is not None and fallback.can_tag:
+            backends.append(fallback)
+        if backends:
+            names = " (or ".join(b.name for b in backends) + ")" * (len(backends) - 1)
+            ui.info(f"Fixing metadata with {names}...")
         else:
             ui.info(f"The {backend.name} backend can't tag files; using the setlists' metadata instead.")
-            backend = None
-    if backend is None:
+    if not backends:
         ui.info("Fixing metadata from the setlists...")
 
     failed_songs = unfetched = 0
     for name, folder in folders:
         try:
-            result = _fix_with_progress(backend, name, folder)
+            result = _fix_with_progress(backends or None, name, folder)
         except FileNotFoundError as exc:
             unfetched += 1
             ui.error(f"{name}: {exc}")
@@ -460,7 +506,7 @@ def run_meta(store: SessionStore, data_dir: Path, settings: Config) -> None:
         raise CliError(" ".join(problems))
 
 
-def _fix_with_progress(backend: DownloadBackend | None, name: str, folder: Path) -> PlaylistMeta:
+def _fix_with_progress(backend: list[DownloadBackend] | None, name: str, folder: Path) -> PlaylistMeta:
     failures = []
     with ui.progress() as bar:
         task = bar.add_task(name, total=None)

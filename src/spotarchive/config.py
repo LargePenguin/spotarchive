@@ -39,6 +39,8 @@ class Config:
     # Browser for the login window; "" = first of Chrome, Edge, bundled Chromium.
     login_browser: str = ""
     backend: str = "somedl"
+    # Backend tried for the songs the main one can't download; "" = none.
+    fallback: str = "ytdlp"
     # Songs downloaded at once; 0 means half of the CPU's threads.
     threads: int = 0
     metadata_source: str = "backend"
@@ -114,9 +116,19 @@ def parse(raw: dict, path: Path) -> Config:
                 raise fail(f"login.browser must be one of {names} (or empty), not {browser!r}")
             browser = key
         config.login_browser = browser
-    download = table(raw.get("download", {}), "download", {"backend", "threads"})
+    download = table(raw.get("download", {}), "download", {"backend", "fallback", "threads"})
     if "backend" in download:
         config.backend = text(download["backend"], "download.backend")
+    if "fallback" in download:
+        if not isinstance(download["fallback"], str):
+            raise fail("download.fallback must be a string (empty: no fallback)")
+        config.fallback = download["fallback"].strip()
+        if config.fallback == config.backend:
+            raise fail(f"download.fallback must be another backend than download.backend ({config.backend!r}), "
+                       'or "" for none')
+    elif config.fallback == config.backend:
+        # The main backend was set to the default fallback: no fallback.
+        config.fallback = ""
     if "threads" in download:
         threads = download["threads"]
         # bool is an int in Python, but `threads = true` is a mistake.

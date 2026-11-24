@@ -121,6 +121,48 @@ def test_backend_failure_is_not_recorded(folder):
     assert "tagged" not in load_record(folder)["https://example.com/Song A"]
 
 
+def test_backends_tag_in_turn_starting_with_the_downloader(folder):
+    main = FakeBackend(can_tag=True, tags_downloads=True, failing={"Song A"}, name="main")
+    spare = FakeBackend(can_tag=True, name="spare")
+    download_playlist([main, spare], "Road Trip", folder)
+    main.tagged.clear()
+    # Added by hand, so nobody tagged it yet: the main backend first.
+    (folder / "main First - Song B.mp3").rename(folder / "First - Song B.mp3")
+
+    result = fix_playlist_metadata("Road Trip", folder, [main, spare])
+
+    record = load_record(folder)
+    # Song A: downloaded by the spare, so tagged by it; the main one isn't asked.
+    assert record["https://example.com/Song A"]["tagged"] == "spare"
+    assert "spare Fake Artist - Song A.mp3" not in main.tagged
+    assert record["https://example.com/Song B"]["tagged"] == "main"
+    # Song C: the main backend tagged it while downloading.
+    assert "tagged" not in record["https://example.com/Song C"]
+    assert (result.updated, result.unchanged, result.failed) == (2, 1, [])
+
+
+def test_spare_tags_what_the_main_backend_cant(folder):
+    main = FakeBackend(can_tag=True, failing={"Song A"}, name="main")
+    spare = FakeBackend(can_tag=True, name="spare")
+    (folder / "Fake Artist - Song A.mp3").write_bytes(SILENT_MP3)
+
+    result = fix_playlist_metadata("Road Trip", folder, [main, spare])
+
+    assert main.tagged == spare.tagged == ["Fake Artist - Song A.mp3"]
+    assert load_record(folder)["https://example.com/Song A"]["tagged"] == "spare"
+    assert result.updated == 1
+
+
+def test_tagging_fails_when_every_backend_fails(folder):
+    main = FakeBackend(can_tag=True, failing={"Song A"}, name="main")
+    spare = FakeBackend(can_tag=True, failing={"Song A"}, name="spare")
+    (folder / "Fake Artist - Song A.mp3").write_bytes(SILENT_MP3)
+
+    result = fix_playlist_metadata("Road Trip", folder, [main, spare])
+
+    assert [(s.name, e) for s, e in result.failed] == [("Song A", "main: not found; spare: not found")]
+
+
 def test_needs_a_setlist(tmp_path):
     with pytest.raises(FileNotFoundError):
         fix_playlist_metadata("Nope", tmp_path, None)

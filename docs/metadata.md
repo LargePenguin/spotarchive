@@ -18,7 +18,7 @@ The tags come from one of two places, chosen with [`source` in `[metadata]`](con
 
 | `source` | Tags come from | Good for |
 | --- | --- | --- |
-| `"backend"` (default) | The download helper's own metadata. SomeDL looks songs up on YouTube Music, MusicBrainz, Genius and Deezer and also adds cover art, lyrics, track numbers and genre. | The richest tags. |
+| `"backend"` (default) | The download helper's own metadata. SomeDL looks songs up on YouTube Music, MusicBrainz, Genius and Deezer and also adds cover art, lyrics, track numbers and genre. yt-dlp finds no metadata and uses the setlist's. | The richest tags. |
 | `"setlist"` | Spotify's metadata in the playlist's `setlist.csv`: title, all artists, album and release date. Other tags already in the file (cover art, lyrics, ...) are kept. | Tags that match exactly what you see on Spotify. |
 
 ```toml
@@ -32,7 +32,9 @@ Download helpers that tag their own downloads, like SomeDL, have already done th
 
 With SomeDL, each such file is run through [`somedl import`](https://github.com/ChemistryGull/SomeDL) in its *update* mode: SomeDL searches for the song by the setlist's first artist and title (`Artist - Song`, the same search it downloads with), then rewrites the file's tags. The file keeps its name and place; SomeDL's import cache and download report are not left in the folder. A song SomeDL can't identify is reported as failed.
 
-If the configured backend can't tag files at all, Spotarchive says so and uses the `setlist` source instead.
+With a [fallback backend](backends.md#fallback-backend), each song goes to the backend that downloaded it (from the [download record](downloading.md#the-downloadsjson-record)) first, and to the other one if that one fails; songs neither downloaded (added by hand) go to the main backend first. So songs [yt-dlp](backends.md#yt-dlp) downloaded keep the setlist's tags rather than being looked up by SomeDL, and a song SomeDL can't identify still gets the setlist's tags from yt-dlp. A song only fails when every backend fails; the reason then lists each one's.
+
+If the configured backends can't tag files at all, Spotarchive says so and uses the `setlist` source instead.
 
 ### `setlist`
 
@@ -40,14 +42,14 @@ Writes the tags with [mutagen](https://mutagen.readthedocs.io/), which handles M
 
 ## What gets recorded
 
-Which source last tagged a song is kept in the playlist's [download record](downloading.md#the-downloadsjson-record) as `"tagged"` (`"somedl"`, `"setlist"`, ...). This lets the `backend` source skip songs it has tagged before, and retag songs the `setlist` source changed if you switch back. Deleting the record is harmless: with `backend`, recognized files are simply tagged again.
+Which source last tagged a song is kept in the playlist's [download record](downloading.md#the-downloadsjson-record) as `"tagged"` (`"somedl"`, `"ytdlp"`, `"setlist"`, ...). This lets the `backend` source skip songs one of the configured backends has tagged before, and retag songs the `setlist` source changed if you switch back. Deleting the record is harmless: with `backend`, recognized files are simply tagged again.
 
 ## Output
 
 A progress bar runs per playlist, then a summary:
 
 ```text
-:: Fixing metadata with somedl...
+:: Fixing metadata with somedl (or ytdlp)...
 Road Trip ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 42/42
 ✘ Example Artist - Example Song: SomeDL couldn't identify the song
 ✘ Road Trip: 3 fixed, 38 already fine, 1 failed

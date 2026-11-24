@@ -13,10 +13,12 @@ from spotarchive.backends.base import (
     TaggingFailed,
 )
 from spotarchive.backends.somedl import SomeDLBackend
+from spotarchive.backends.ytdlp import YtDlpBackend
 
 DEFAULT_BACKEND = "somedl"
 BACKENDS: dict[str, Callable[..., DownloadBackend]] = {
     "somedl": SomeDLBackend,
+    "ytdlp": YtDlpBackend,
 }
 
 __all__ = [

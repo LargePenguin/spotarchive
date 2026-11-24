@@ -9,6 +9,7 @@ data_dir = "data"
 
 [download]
 backend = "somedl"
+fallback = "ytdlp"
 threads = 0
 
 [metadata]
@@ -18,6 +19,13 @@ source = "backend"
 executable = ""
 audio_format = ""
 flat = true
+extra_args = []
+
+[backends.ytdlp]
+executable = ""
+audio_format = "mp3"
+search_results = 5
+length_tolerance = 30
 extra_args = []
 ```
 
@@ -47,7 +55,8 @@ Moving `data_dir` doesn't move existing files: move the old folder's contents yo
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `backend` | `"somedl"` | The [download backend](backends.md) that sources the songs. Currently only `"somedl"`. |
+| `backend` | `"somedl"` | The [download backend](backends.md) that sources the songs: `"somedl"` or `"ytdlp"`. |
+| `fallback` | `"ytdlp"` | The [fallback backend](backends.md#fallback-backend), tried for every song the main backend can't download. `""`: no fallback. Must differ from `backend`. Setting `backend = "ytdlp"` without a `fallback` line means no fallback. |
 | `threads` | `0` | How many songs to [download at once](downloading.md#several-songs-at-once). `0`: half of the threads your CPU can run at once. `1`: [one at a time](downloading.md#one-song-at-a-time), showing the backend's own output. `spotarchive --threads N` (`-t N`) overrides it for one run. |
 
 ### `[metadata]`
@@ -58,7 +67,7 @@ Moving `data_dir` doesn't move existing files: move the old folder's contents yo
 
 ### `[backends.<name>]`
 
-Settings for one backend; only the table of the backend chosen in `[download]` is used. An empty string (`""`) means the backend's default.
+Settings for one backend; only the tables of the backends chosen in `[download]` (`backend` and `fallback`) are used. An empty string (`""`) means the backend's default.
 
 #### `[backends.somedl]`
 
@@ -71,6 +80,16 @@ Settings for one backend; only the table of the backend chosen in `[download]` i
 
 Switching `flat` or `audio_format` doesn't redownload anything: songs already there are still [recognized](downloading.md#skipping-songs-you-already-have).
 
+#### `[backends.ytdlp]`
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `executable` | `""` | Path to the `yt-dlp` program. Empty: look next to Spotarchive's Python, then on your `PATH`. |
+| `audio_format` | `"mp3"` | Audio format passed as `--audio-format`: `"mp3"`, `"m4a"`, `"opus"`, `"vorbis"`, `"flac"`, `"alac"`, `"aac"`, `"wav"` or `"best"` (whatever YouTube has, not converted). The setlist's tags can't be written to `wav` and `aac` files. |
+| `search_results` | `5` | How many YouTube search results to look through for a video of the right length. |
+| `length_tolerance` | `30` | Seconds a video may be shorter or longer than the song on Spotify. `0`: any length (the first result). See [how Spotarchive runs yt-dlp](backends.md#how-spotarchive-runs-it-1). |
+| `extra_args` | `[]` | Extra command-line options for every download, e.g. `["--sleep-requests", "1"]`. yt-dlp's own config files are ignored, so put options here. |
+
 ## Errors
 
 Spotarchive checks the file before doing anything and stops with a message naming the problem, for example:
@@ -79,6 +98,6 @@ Spotarchive checks the file before doing anything and stops with a message namin
 ✘ /home/<your-username>/spotarchive/spotarchive.toml: unknown setting 'sorce' in metadata
 ```
 
-Misspelled settings are reported rather than ignored. A setting a backend doesn't know (in `[backends.somedl]`) is reported when that backend is first needed.
+Misspelled settings are reported rather than ignored. A setting a backend doesn't know (in `[backends.somedl]` or `[backends.ytdlp]`), or a bad value for one, is reported when that backend is first needed.
 
 Back to the [documentation index](README.md).

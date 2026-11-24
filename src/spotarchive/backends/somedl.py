@@ -23,9 +23,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 from spotarchive.backends.base import (
     BackendUnavailable,
@@ -34,6 +32,15 @@ from spotarchive.backends.base import (
     DownloadFailed,
     Song,
     TaggingFailed,
+)
+from spotarchive.backends.util import (
+    cookie_file,
+    enable_ansi,
+    find_executable as _find,
+    forward,
+    has_deno,
+    is_terminal,
+    safe_name,
 )
 
 INSTALL_HINT = (
@@ -44,7 +51,6 @@ INSTALL_HINT = (
 _SUBCOMMANDS = {"import", "new-template", "update-metadata", "download", "sync", "web"}
 # `somedl import` lists the files it handled in this file, one path per line.
 _IMPORT_CACHE = "somedl_import_cache"
-_INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 # Per-song download folder inside the playlist folder (hidden: the dot keeps
 # it out of the "already there" check). Kept short: SomeDL and yt-dlp write
 # long file names (and `.part` files) into it, and Windows allows only 260
@@ -75,7 +81,7 @@ _CAPTURE_COLUMNS = 1000
 
 def find_executable(name: str = "somedl") -> str | None:
     """Look next to the running Python first (an unactivated virtualenv), then on PATH."""
-    return shutil.which(name, path=str(Path(sys.executable).parent)) or shutil.which(name)
+    return _find(name)
 
 
 class _PathTooLong(DownloadFailed):
@@ -111,11 +117,7 @@ class SomeDLBackend(DownloadBackend):
             )
 
     def warnings(self) -> list[str]:
-        # yt-dlp looks for Deno in its own Python's scripts folder, then on
-        # PATH; SomeDL's folder stands in for the first one (resolved, since
-        # pipx links `somedl` from its own virtualenv into ~/.local/bin).
-        folder = str(Path(self.executable).resolve().parent) if self.executable else None
-        if (folder and shutil.which("deno", path=folder)) or shutil.which("deno"):
+        if has_deno(self.executable):
             return []
         return [
             "Deno isn't installed. yt-dlp, which SomeDL downloads with, needs it for YouTube; "
@@ -162,7 +164,7 @@ class SomeDLBackend(DownloadBackend):
         staging = Path(tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=where))
         try:
             # Its own cookie file too, so parallel downloads don't share one.
-            with self._cookie_file() as cookies:
+            with cookie_file(self.youtube_login) as cookies:
                 cmd = self.command(song, cookies)
                 try:
                     returncode, output = run_somedl(cmd, staging, events)
@@ -183,32 +185,12 @@ class SomeDLBackend(DownloadBackend):
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
-    @contextmanager
-    def _cookie_file(self) -> Iterator[Path | None]:
-        """The YouTube login as a ``cookies.txt`` that lives for one SomeDL run.
-
-        A fresh file each time: yt-dlp writes the cookies back when it's
-        done, and the saved login stays the one the browser handed over.
-        """
-        if self.youtube_login is None:
-            yield None
-            return
-        # mkstemp creates the file readable only by the owner.
-        fd, name = tempfile.mkstemp(prefix="spotarchive-cookies-", suffix=".txt")
-        path = Path(name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-                f.write(self.youtube_login.netscape_cookies())
-            yield path
-        finally:
-            path.unlink(missing_ok=True)
-
     def tag(self, song: Song, file: Path) -> None:
         # The wizard works on a whole folder and leaves its cache and an HTML
         # report there, so the file is moved alone into a temporary folder,
         # named after the setlist row: SomeDL searches with the file name.
         staging = Path(tempfile.mkdtemp(prefix=".somedl-import-", dir=file.parent))
-        staged = staging / f"{_safe_name(song_query(song))}{file.suffix.lower()}"
+        staged = staging / f"{safe_name(song_query(song))}{file.suffix.lower()}"
         try:
             file.rename(staged)
         except OSError as exc:
@@ -256,10 +238,6 @@ def import_answers(staging: Path) -> str:
 
 def song_query(song: Song) -> str:
     return f"{song.artists[0]} - {song.name}" if song.artists else song.name
-
-
-def _safe_name(name: str) -> str:
-    return " ".join(_INVALID_CHARS.sub("_", name).split()) or "song"
 
 
 def _last_line(output: str | None) -> str:
@@ -425,8 +403,8 @@ def run_somedl(cmd: list[str], cwd: Path, events: DownloadEvents) -> tuple[int, 
     parser = OutputParser(events)
     env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
     show = events.show_output
-    if show and _is_terminal(sys.stdout):
-        if not _enable_ansi():
+    if show and is_terminal(sys.stdout):
+        if not enable_ansi():
             # A console that can't show escape sequences (old Windows): let
             # SomeDL draw on it directly; then only the result is known.
             return subprocess.run(cmd, cwd=cwd, check=False).returncode, parser
@@ -444,7 +422,7 @@ def run_somedl(cmd: list[str], cwd: Path, events: DownloadEvents) -> tuple[int, 
             if not chunk:
                 break
             if show:
-                _forward(chunk)
+                forward(chunk)
             parser.feed(chunk)
         returncode = proc.wait()
     parser.close()
@@ -455,44 +433,3 @@ def _forced_terminal(columns: int, lines: int) -> dict[str, str]:
     # Rich (SomeDL's output library) trusts these over its own terminal check.
     return {"FORCE_COLOR": "1", "TTY_COMPATIBLE": "1", "TTY_INTERACTIVE": "1",
             "COLUMNS": str(columns), "LINES": str(lines)}
-
-
-def _is_terminal(stream) -> bool:
-    try:
-        return stream.isatty()
-    except (AttributeError, ValueError):
-        return False
-
-
-def _forward(chunk: bytes) -> None:
-    """Pass SomeDL's output (UTF-8) on to our stdout."""
-    out = getattr(sys.stdout, "buffer", None)
-    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
-    if out is None:
-        sys.stdout.write(chunk.decode("utf-8", errors="replace"))
-        sys.stdout.flush()
-        return
-    if codecs.lookup(encoding).name != "utf-8":
-        chunk = chunk.decode("utf-8", errors="replace").encode(encoding, errors="replace")
-    sys.stdout.flush()
-    out.write(chunk)
-    out.flush()
-
-
-def _enable_ansi() -> bool:
-    """Make sure the terminal interprets escape sequences (Windows consoles need switching on)."""
-    if sys.platform != "win32":
-        return True
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
-        mode = wintypes.DWORD()
-        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
-            return False
-        enable_vt = 0x0004  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
-        return bool(mode.value & enable_vt or kernel32.SetConsoleMode(handle, mode.value | enable_vt))
-    except (AttributeError, OSError):
-        return False

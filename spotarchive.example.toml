@@ -16,8 +16,11 @@ data_dir = "data"
 browser = ""
 
 [download]
-# Download helper that sources the songs. Available: "somedl".
+# Download helper that sources the songs. Available: "somedl", "ytdlp".
 backend = "somedl"
+# Helper that tries the songs the first one can't download (SomeDL only
+# searches YouTube Music, yt-dlp all of YouTube). Empty: no fallback.
+fallback = "ytdlp"
 # How many songs to download at once. 0: half of the threads your CPU runs at
 # once. 1: one at a time, showing the helper's own output. Overridden by
 # `spotarchive --threads N` (-t N).
@@ -26,8 +29,10 @@ threads = 0
 [metadata]
 # Where `spotarchive --meta` takes the songs' tags from:
 #   "backend"  the download helper's own metadata (SomeDL: YouTube Music,
-#              MusicBrainz, ...). Falls back to "setlist" for helpers that
-#              can't tag files.
+#              MusicBrainz, ...). Each song is tagged by the helper that
+#              downloaded it, else by the other one. yt-dlp finds no metadata
+#              and uses the setlist's. Falls back to "setlist" for helpers
+#              that can't tag files.
 #   "setlist"  Spotify's metadata from setlist.csv (title, artists, album,
 #              release date).
 source = "backend"
@@ -44,4 +49,19 @@ audio_format = ""
 # artist/album subfolders), inside the playlist folder.
 flat = true
 # Extra command-line options for every download, e.g. ["--sleep", "5"].
+extra_args = []
+
+[backends.ytdlp]
+# Path to the yt-dlp program. Empty: look next to Spotarchive's Python, then on PATH.
+executable = ""
+# Audio format: "mp3", "m4a", "opus", "vorbis", "flac", "alac", "aac", "wav" or
+# "best" (whatever YouTube has, not converted).
+audio_format = "mp3"
+# How many YouTube search results to look through for a video of the right length.
+search_results = 5
+# Seconds a video may be shorter or longer than the song on Spotify (music
+# videos often have an intro). 0: any length.
+length_tolerance = 30
+# Extra command-line options for every download, e.g. ["--sleep-requests", "1"].
+# yt-dlp's own config files are ignored.
 extra_args = []
