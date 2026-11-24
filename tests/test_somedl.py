@@ -111,6 +111,84 @@ def test_downloads_in_a_private_folder_that_is_removed(tmp_path, run):
     assert sorted(p.name for p in tmp_path.iterdir()) == ["Fake Artist - Song A.mp3"]
 
 
+def test_staging_folder_name_is_short(tmp_path, run):
+    backend().download(SONG, tmp_path, Events())
+    assert len(run.calls[0]["cmd"]) and len(run.calls[0]["cwd"].name) <= 16
+
+
+def test_fit_name_leaves_a_fitting_name_alone(tmp_path):
+    assert somedl.fit_name(tmp_path, "Fake Artist - Song A.mp3") == "Fake Artist - Song A.mp3"
+
+
+def test_fit_name_cuts_the_stem_and_keeps_the_extension(tmp_path, monkeypatch):
+    monkeypatch.setattr(somedl, "path_limit", lambda: len(str(tmp_path)) + 1 + 20)
+    name = somedl.fit_name(tmp_path, "A very long song title that goes on.mp3")
+    assert name.endswith(".mp3") and somedl._size(name) <= 20 and name.startswith("A very long")
+
+
+def test_fit_name_counts_in_the_units_of_the_file_system(tmp_path, monkeypatch):
+    monkeypatch.setattr(somedl, "path_limit", lambda: 1_000_000)
+    monkeypatch.setattr(somedl, "_NAME_LIMIT", 20)
+    name = somedl.fit_name(tmp_path, "ñandú ñandú ñandú ñandú.mp3")
+    assert name.endswith(".mp3") and somedl._size(name) <= 20
+    name.encode("utf-8")  # still valid text, never cut in the middle of a character
+
+
+def test_fit_name_fails_without_room(tmp_path, monkeypatch):
+    monkeypatch.setattr(somedl, "path_limit", lambda: len(str(tmp_path)) + 3)
+    with pytest.raises(DownloadFailed, match="no room"):
+        somedl.fit_name(tmp_path, "Song.mp3")
+
+
+def test_long_file_names_are_shortened_with_a_warning(tmp_path, run, monkeypatch):
+    monkeypatch.setattr(somedl, "path_limit", lambda: len(str(tmp_path)) + 1 + 30)
+    run.filename = "Fake Artist - A song title that is far too long.mp3"
+    events = Events()
+    (moved,) = backend().download(SONG, tmp_path, events)
+    assert moved.parent == tmp_path and moved.suffix == ".mp3" and len(moved.name) <= 30
+    assert moved.read_bytes() == b"fake audio"
+    warnings = [m for kind, m in events.seen if kind == "warning"]
+    assert len(warnings) == 1 and "shortened" in warnings[0] and run.filename in warnings[0] and moved.name in warnings[0]
+
+
+def test_fitting_file_names_give_no_warning(tmp_path, run):
+    events = Events()
+    backend().download(SONG, tmp_path, events)
+    assert not [1 for kind, _ in events.seen if kind == "warning"]
+
+
+def test_too_long_path_is_retried_in_a_shorter_folder(tmp_path, monkeypatch):
+    short = tmp_path / "t"
+    short.mkdir()
+    folder = tmp_path / "a-playlist-folder-with-a-rather-long-name"
+    folder.mkdir()
+    monkeypatch.setattr(somedl.tempfile, "gettempdir", lambda: str(short))
+    cwds = []
+
+    def popen(cmd, cwd=None, **kw):
+        cwds.append(Path(cwd))
+        if len(cwds) == 1:
+            line = b"1/1 Song: ERROR - yt-dlp: ERROR: unable to open for writing: [Errno 2] No such file\n"
+            return FakeProcess([line], 0)
+        (Path(cwd) / "Fake Artist - Song A.mp3").write_bytes(b"fake audio")
+        return FakeProcess([], 0)
+
+    monkeypatch.setattr(somedl.subprocess, "Popen", popen)
+    events = Events()
+    assert backend().download(SONG, folder, events) == [folder / "Fake Artist - Song A.mp3"]
+    assert cwds[0].parent == folder and cwds[1].parent == short
+    assert any(kind == "warning" and "too long" in m for kind, m in events.seen)
+    assert list(short.iterdir()) == []
+
+
+def test_too_long_path_without_a_shorter_folder_fails(tmp_path, run, monkeypatch):
+    monkeypatch.setattr(somedl.tempfile, "gettempdir", lambda: str(tmp_path / "much-longer-than-the-folder"))
+    run.filename = None
+    run.output = [b"1/1 Song: ERROR - yt-dlp: ERROR: unable to open for writing: [Errno 2] No such file\n"]
+    with pytest.raises(DownloadFailed, match="path too long"):
+        backend().download(SONG, tmp_path, Events())
+
+
 def test_concurrent_downloads_keep_their_own_files(tmp_path, monkeypatch):
     # Another song finishing in the same folder meanwhile isn't taken for this one.
     def popen(cmd, cwd=None, **kw):
