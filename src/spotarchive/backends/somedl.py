@@ -46,8 +46,20 @@ _SUBCOMMANDS = {"import", "new-template", "update-metadata", "download", "sync",
 _IMPORT_CACHE = "somedl_import_cache"
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 # Per-song download folder inside the playlist folder (hidden: the dot keeps
-# it out of the "already there" check).
-STAGING_PREFIX = ".somedl-download-"
+# it out of the "already there" check). Kept short: SomeDL and yt-dlp write
+# long file names (and `.part` files) into it, and Windows allows only 260
+# characters for the whole path.
+STAGING_PREFIX = ".sd-"
+# What yt-dlp reports when the file it wants to write doesn't fit the path limit
+# (on Windows an overlong path reads as "No such file or directory").
+_PATH_TOO_LONG = re.compile(
+    r"unable to open for writing|file name too long|filename too long|Errno 36|WinError 206",
+    re.IGNORECASE,
+)
+# Windows: MAX_PATH is 260 including the terminating NUL; file names are limited to 255 UTF-16 units.
+_WINDOWS_PATH_LIMIT = 259
+_POSIX_PATH_LIMIT = 4095
+_NAME_LIMIT = 255
 # Terminal escape sequences (colors, cursor moves of SomeDL's live table).
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
 # "1/1 Artist - Song: WARNING - message" (the label is optional).
@@ -64,6 +76,10 @@ _CAPTURE_COLUMNS = 1000
 def find_executable(name: str = "somedl") -> str | None:
     """Look next to the running Python first (an unactivated virtualenv), then on PATH."""
     return shutil.which(name, path=str(Path(sys.executable).parent)) or shutil.which(name)
+
+
+class _PathTooLong(DownloadFailed):
+    """SomeDL's file didn't fit the file system's path limit."""
 
 
 class SomeDLBackend(DownloadBackend):
@@ -127,9 +143,23 @@ class SomeDLBackend(DownloadBackend):
 
     def download(self, song: Song, folder: Path, events: DownloadEvents | None = None) -> list[Path]:
         events = events or DownloadEvents()
+        try:
+            return self._download_in(song, folder, folder, events)
+        except _PathTooLong as exc:
+            # The song's own file name is too long for the playlist folder's
+            # path. Try again in the shortest folder there is: the system's
+            # temporary one; the file name is shortened when it's moved back.
+            short = Path(tempfile.gettempdir())
+            if len(str(short)) >= len(str(folder)):
+                raise DownloadFailed(f"{exc} (path too long: {folder})") from exc
+            events.warning(f"The path was too long to download into {folder}; trying again in a shorter folder.")
+            return self._download_in(song, folder, short, events)
+
+    def _download_in(self, song: Song, folder: Path, where: Path, events: DownloadEvents) -> list[Path]:
+        """Download *song* into a new hidden folder inside *where*, then move the files to *folder*."""
         # Each song downloads into its own hidden folder, so the new files are
         # simply what's in it, even with other songs downloading next to it.
-        staging = Path(tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=folder))
+        staging = Path(tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=where))
         try:
             # Its own cookie file too, so parallel downloads don't share one.
             with self._cookie_file() as cookies:
@@ -143,10 +173,13 @@ class SomeDLBackend(DownloadBackend):
                 raise DownloadFailed(f"SomeDL exited with code {returncode}{output.reason(' ({})')}")
             # SomeDL exits with 0 even when a song fails, so look for a file.
             if not new:
+                reason = output.reason()
+                if reason and _PATH_TOO_LONG.search(reason):
+                    raise _PathTooLong(reason)
                 raise DownloadFailed(
-                    output.reason() or "SomeDL didn't produce a file (not found, or the download failed)"
+                    reason or "SomeDL didn't produce a file (not found, or the download failed)"
                 )
-            return _move_into(staging, folder, new)
+            return _move_into(staging, folder, new, events)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
@@ -234,17 +267,62 @@ def _last_line(output: str | None) -> str:
     return f" ({lines[-1]})" if lines else ""
 
 
-def _move_into(staging: Path, folder: Path, audio: list[Path]) -> list[Path]:
-    """Move everything SomeDL wrote (subfolders included) into *folder*; return the audio files' new paths."""
+def path_limit() -> int:
+    """The longest whole path the file system takes."""
+    return _WINDOWS_PATH_LIMIT if os.name == "nt" else _POSIX_PATH_LIMIT
+
+
+def _size(text: str) -> int:
+    """Length of *text* in the unit the file system limits it in (UTF-16 units on Windows, else UTF-8 bytes)."""
+    return len(text.encode("utf-16-le")) // 2 if os.name == "nt" else len(text.encode("utf-8"))
+
+
+def fit_name(folder: Path, name: str) -> str:
+    """*name* cut (keeping its extension) so that ``folder / name`` fits the path and file name limits."""
+    room = min(_NAME_LIMIT, path_limit() - _size(str(folder)) - 1)
+    if _size(name) <= room:
+        return name
+    path = Path(name)
+    suffix = path.suffix
+    stem = path.stem
+    room -= _size(suffix)
+    if room < 1:
+        raise DownloadFailed(f"the playlist folder's path leaves no room for a file name: {folder}")
+    while stem and _size(stem) > room:
+        stem = stem[:-1]
+    return f"{stem.rstrip(' .')}{suffix}"
+
+
+def _place(source: Path, target: Path) -> None:
+    """Move *source* over *target*, also across file systems."""
+    try:
+        # Like SomeDL itself with --skip-file-check: replace what's there.
+        os.replace(source, target)
+    except OSError:
+        if source.parent.stat().st_dev == target.parent.stat().st_dev:
+            raise
+        shutil.copy2(source, target)
+        source.unlink()
+
+
+def _move_into(staging: Path, folder: Path, audio: list[Path], events: DownloadEvents | None = None) -> list[Path]:
+    """Move everything SomeDL wrote (subfolders included) into *folder*; return the audio files' new paths.
+
+    A file name too long for *folder* is shortened, and *events* told.
+    """
     moved = []
     for p in sorted(staging.rglob("*")):
         if not p.is_file():
             continue
-        target = folder / p.relative_to(staging)
+        relative = p.relative_to(staging)
+        directory = folder / relative.parent
+        name = fit_name(directory, p.name)
+        if name != p.name and events is not None:
+            events.warning(f'File name shortened to fit the path limit: "{p.name}" -> "{name}"')
+        target = directory / name
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            # Like SomeDL itself with --skip-file-check: replace what's there.
-            os.replace(p, target)
+            _place(p, target)
         except OSError as exc:
             raise DownloadFailed(f"couldn't move {target.name} into the playlist folder: {exc}") from exc
         if p in audio:
