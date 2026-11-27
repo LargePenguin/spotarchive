@@ -35,6 +35,7 @@ def write_setlist_tags(path: Path, song: Song) -> bool:
         for key, values in changes.items():
             audio[key] = values
         audio.save()
-    except (mutagen.MutagenError, OSError) as exc:
+    # TypeError: formats without "easy" tag names, like WAV, refuse plain text.
+    except (mutagen.MutagenError, OSError, TypeError) as exc:
         raise TaggingFailed(f"couldn't tag {path.name}: {exc}") from exc
     return True
