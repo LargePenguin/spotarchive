@@ -9,6 +9,8 @@ from spotarchive.backends.base import (
     DownloadBackend,
     DownloadEvents,
     DownloadFailed,
+    ImportItem,
+    ImportListing,
     Song,
     TaggingFailed,
 )
@@ -16,6 +18,8 @@ from spotarchive.backends.somedl import SomeDLBackend
 from spotarchive.backends.ytdlp import YtDlpBackend
 
 DEFAULT_BACKEND = "somedl"
+# The backend that imports links (``--download LINK``), whatever is configured.
+IMPORT_BACKEND = "ytdlp"
 BACKENDS: dict[str, Callable[..., DownloadBackend]] = {
     "somedl": SomeDLBackend,
     "ytdlp": YtDlpBackend,
@@ -28,6 +32,9 @@ __all__ = [
     "DownloadBackend",
     "DownloadEvents",
     "DownloadFailed",
+    "IMPORT_BACKEND",
+    "ImportItem",
+    "ImportListing",
     "Song",
     "TaggingFailed",
     "get_backend",

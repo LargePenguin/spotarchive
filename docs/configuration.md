@@ -90,6 +90,8 @@ Switching `flat` or `audio_format` doesn't redownload anything: songs already th
 | `length_tolerance` | `30` | Seconds a video may be shorter or longer than the song on Spotify. `0`: any length (the first result). See [how Spotarchive runs yt-dlp](backends.md#how-spotarchive-runs-it-1). |
 | `extra_args` | `[]` | Extra command-line options for every download, e.g. `["--sleep-requests", "1"]`. yt-dlp's own config files are ignored, so put options here. |
 
+[Link imports](downloading.md#importing-a-link) always use yt-dlp, with `executable`, `audio_format` and `extra_args` from this table.
+
 ## Errors
 
 Spotarchive checks the file before doing anything and stops with a message naming the problem, for example:

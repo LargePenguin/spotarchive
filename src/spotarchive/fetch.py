@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Callable
 
 from spotarchive.session import PlaylistState, SessionStore
-from spotarchive.setlist import assign_folders, prepare_folder, write_setlist
+from spotarchive.setlist import IMPORTS_FOLDER, assign_folders, prepare_folder, write_setlist
 from spotarchive.spotify.client import ProgressCallback, SpotifyApiError, SpotifyClient
 from spotarchive.spotify.models import Playlist
 
@@ -51,15 +51,28 @@ def fetch_setlists(
 
     A failure on one playlist is reported in its result and doesn't stop
     the others. The session is saved after each playlist so folder moves are
-    never forgotten.
+    never forgotten. A playlist in the folder imported links go to is moved
+    out of it, even when it isn't being fetched.
     """
     fetching = {p.id for p in playlists}
+    evicted = {
+        pid: state for pid, state in store.playlists.items()
+        if pid not in fetching and (state.folder or "").casefold() == IMPORTS_FOLDER.casefold()
+    }
     folders = assign_folders(
-        {p.id: p.name for p in playlists},
+        {**{p.id: p.name for p in playlists}, **{pid: s.name for pid, s in evicted.items()}},
         {pid: state.folder for pid, state in store.playlists.items()},
         # Folders of playlists not being fetched now still hold their files.
-        reserved={s.folder for pid, s in store.playlists.items() if s.folder and pid not in fetching},
+        reserved={IMPORTS_FOLDER} | {
+            s.folder for pid, s in store.playlists.items()
+            if s.folder and pid not in fetching and pid not in evicted
+        },
     )
+    for pid, state in evicted.items():
+        if (data_dir / state.folder).is_dir():
+            prepare_folder(data_dir, folders[pid], state.folder)
+        state.folder = folders[pid]
+        store.save()
     results = []
     for playlist in playlists:
         try:

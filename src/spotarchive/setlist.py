@@ -16,6 +16,8 @@ COLUMNS = ["name", "artist", "album", "release_date", "date_added", "duration_ms
 # Artist names can contain commas ("Tyler, The Creator"), so join with ";".
 ARTIST_SEPARATOR = "; "
 MAX_FOLDER_NAME = 100
+# The data folder's subfolder for imported links; never a playlist's.
+IMPORTS_FOLDER = "Imports"
 
 # Characters Windows forbids in file names, plus control characters.
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')

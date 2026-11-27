@@ -11,10 +11,11 @@ from pathlib import Path
 import requests
 
 from spotarchive import __version__, config, ui, update
-from spotarchive.backends import BackendUnavailable, DownloadBackend, get_backend
+from spotarchive.backends import IMPORT_BACKEND, BackendUnavailable, DownloadBackend, DownloadFailed, get_backend
 from spotarchive.config import Config, ConfigError
 from spotarchive.download import (
     DownloadListener,
+    PlaylistDownload,
     SongDownload,
     download_all,
     prepare_playlist,
@@ -22,6 +23,14 @@ from spotarchive.download import (
 )
 from spotarchive.downloadlog import DownloadLog
 from spotarchive.fetch import fetch_setlists, update_selection
+from spotarchive.importer import (
+    ImportRefused,
+    LinkImporter,
+    check_link,
+    import_folder,
+    imports_root,
+    prepare_import,
+)
 from spotarchive.meta import PlaylistMeta, fix_playlist_metadata
 from spotarchive.session import SessionError, SessionStore
 from spotarchive.spotify.auth import (
@@ -74,7 +83,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "-d", "--download", action="store_true",
-        help="download the songs of the fetched setlists that aren't there yet",
+        help="download the songs of the fetched setlists that aren't there yet; "
+             "with a LINK, download what it points to instead",
+    )
+    # Not -d's value: argparse would then read -dm as -d with the value "m".
+    parser.add_argument(
+        "link", nargs="?", metavar="LINK",
+        help="with --download: a YouTube (or other site yt-dlp supports) video or playlist to import",
     )
     parser.add_argument(
         "-m", "--meta", action="store_true",
@@ -316,6 +331,86 @@ def _usable_fallback(settings: Config, log: DownloadLog | None = None) -> Downlo
         return None
 
 
+def make_importer(settings: Config) -> DownloadBackend:
+    """The backend that imports links."""
+    return _build_backend(settings, IMPORT_BACKEND)
+
+
+def _show_warnings(backends: list[DownloadBackend], log: DownloadLog) -> None:
+    shown = set()
+    for warning in (w for b in backends for w in b.warnings()):
+        # Both run yt-dlp, so they may warn the same.
+        if warning not in shown:
+            shown.add(warning)
+            ui.warn(warning)
+            log.warning(warning)
+
+
+def _hand_over_youtube_login(store: SessionStore, backends: list[DownloadBackend], log: DownloadLog) -> None:
+    if youtube_auth.is_logged_in(store.youtube):
+        for b in backends:
+            b.use_youtube_login(store.youtube)
+    elif store.youtube is not None:
+        expired = (
+            "The saved YouTube login has expired, so age-restricted songs may fail; "
+            "run `spotarchive -l youtube` to log in again."
+        )
+        ui.warn(expired)
+        log.warning(expired)
+
+
+def _download(backends: list[DownloadBackend], playlists: list[PlaylistDownload], threads: int,
+              log: DownloadLog) -> None:
+    """Download the pending songs, with the display that fits."""
+    if threads > 1:
+        pending = sum(len(p.pending) for p in playlists)
+        if pending:
+            ui.info(f"Downloading {pending} songs, up to {min(threads, pending)} at a time...")
+        with ui.DownloadBoard() as board:
+            download_all(backends, playlists, threads, _BoardListener(board, len(playlists) > 1), log)
+    elif all(b.shows_own_output for b in backends):
+        download_all(backends, playlists, 1, _OwnOutputListener(), log)
+    else:
+        with ui.progress() as bar:
+            download_all(backends, playlists, 1, _ProgressListener(bar), log)
+
+
+def _show_log(log: DownloadLog) -> None:
+    if log.written:
+        ui.info(f"{_plural(log.errors, 'error')} and {_plural(log.warnings, 'warning')} were logged to {log.path}")
+
+
+def run_import(store: SessionStore, data_dir: Path, settings: Config, link: str, threads: int | None = None) -> None:
+    """``--download LINK``: download what the link points to. Never talks to Spotify."""
+    link = check_link(link)
+    root = imports_root(store, data_dir)
+    backend = make_importer(settings)
+    backend.check()
+    log = DownloadLog.for_run(data_dir)
+    _show_warnings([backend], log)
+    _hand_over_youtube_login(store, [backend], log)
+    try:
+        with ui.working("Reading the link..."):
+            listing = backend.list_url(link)
+    except DownloadFailed as exc:
+        raise CliError(f"Couldn't import the link: {exc}") from exc
+
+    result = prepare_import(listing, import_folder(root, listing))
+    _download([LinkImporter(backend)], [result], threads or settings.download_threads(), log)
+
+    summary = f"{result.name}: {result.downloaded} downloaded, {result.already_present} already there"
+    if result.failed:
+        ui.error(f"{summary}, {len(result.failed)} failed")
+    else:
+        ui.ok(f"{summary} -> {result.folder}")
+    _show_log(log)
+    if result.failed:
+        raise CliError(
+            f"{len(result.failed)} of {result.total} items couldn't be imported; "
+            "run the same command again to retry them."
+        )
+
+
 def run_download(store: SessionStore, data_dir: Path, settings: Config, threads: int | None = None) -> None:
     """Download what's missing; *threads* (from --threads) overrides the configured number."""
     folders = selected_folders(store, data_dir)
@@ -327,23 +422,8 @@ def run_download(store: SessionStore, data_dir: Path, settings: Config, threads:
     fallback = _usable_fallback(settings, log)
     # Every song is tried with these in turn.
     backends = [backend] if fallback is None else [backend, fallback]
-    shown = set()
-    for warning in (w for b in backends for w in b.warnings()):
-        # Both run yt-dlp, so they may warn the same.
-        if warning not in shown:
-            shown.add(warning)
-            ui.warn(warning)
-            log.warning(warning)
-    if youtube_auth.is_logged_in(store.youtube):
-        for b in backends:
-            b.use_youtube_login(store.youtube)
-    elif store.youtube is not None:
-        expired = (
-            "The saved YouTube login has expired, so age-restricted songs may fail; "
-            "run `spotarchive -l youtube` to log in again."
-        )
-        ui.warn(expired)
-        log.warning(expired)
+    _show_warnings(backends, log)
+    _hand_over_youtube_login(store, backends, log)
     threads = threads or settings.download_threads()
 
     playlists, unfetched = [], 0
@@ -358,16 +438,7 @@ def run_download(store: SessionStore, data_dir: Path, settings: Config, threads:
 
     if fallback is not None and pending:
         ui.info(f"Songs {backend.name} can't download are tried with {fallback.name}.")
-    if threads > 1:
-        if pending:
-            ui.info(f"Downloading {pending} songs, up to {min(threads, pending)} at a time...")
-        with ui.DownloadBoard() as board:
-            download_all(backends, playlists, threads, _BoardListener(board, len(playlists) > 1), log)
-    elif all(b.shows_own_output for b in backends):
-        download_all(backends, playlists, 1, _OwnOutputListener(), log)
-    else:
-        with ui.progress() as bar:
-            download_all(backends, playlists, 1, _ProgressListener(bar), log)
+    _download(backends, playlists, threads, log)
 
     failed_songs = 0
     for result in playlists:
@@ -381,8 +452,7 @@ def run_download(store: SessionStore, data_dir: Path, settings: Config, threads:
         downloaded = sum(p.downloaded for p in playlists)
         total = f"Total: {downloaded} downloaded, {failed_songs} failed"
         (ui.error if failed_songs else ui.ok)(f"{total}, {sum(p.already_present for p in playlists)} already there.")
-    if log.written:
-        ui.info(f"{_plural(log.errors, 'error')} and {_plural(log.warnings, 'warning')} were logged to {log.path}")
+    _show_log(log)
 
     problems = []
     if failed_songs:
@@ -614,6 +684,13 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
         parser.error("--noselect only works together with --fetch (e.g. -fn)")
     if args.update and (args.login or args.fetch or args.download or args.meta or args.threads):
         parser.error("--update can't be combined with other options")
+    if args.link is not None:
+        if not args.download:
+            parser.error("a LINK only works with --download (spotarchive -d LINK)")
+        if args.login or args.fetch or args.meta:
+            parser.error(
+                "-d LINK can't be combined with --login, --fetch or --meta (imports are tagged as they download)"
+            )
     plain = not (args.login or args.fetch or args.download or args.meta)
     if args.threads is not None and not (args.download or plain):
         parser.error("--threads only works when downloading (e.g. -d -t 4)")
@@ -627,6 +704,9 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
         settings = config.load(args.config)
         data_dir = settings.data_dir if data_dir is None else data_dir
         store = SessionStore.load(data_dir)
+        if args.link is not None:
+            run_import(store, data_dir, settings, args.link, args.threads)
+            return 0
         if args.login:
             run_login(store, args.login, settings.login_browser, args.cookies)
         if plain:
@@ -666,7 +746,8 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
     except RateLimited as exc:
         ui.error(rate_limit_message(exc))
         return 1
-    except (AuthError, BackendUnavailable, ConfigError, SessionError, SpotifyApiError, CliError) as exc:
+    except (AuthError, BackendUnavailable, ConfigError, ImportRefused, SessionError, SpotifyApiError,
+            CliError) as exc:
         ui.error(str(exc))
         return 1
     except requests.RequestException as exc:

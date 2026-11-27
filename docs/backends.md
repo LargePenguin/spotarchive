@@ -120,6 +120,19 @@ Right after downloading, the file gets the setlist's tags (with [mutagen](https:
 
 yt-dlp's `WARNING:` and `ERROR:` lines go to the [log file](downloading.md#the-log-file), and its `[download]  42%` lines drive the progress bar. With [one thread](downloading.md#one-song-at-a-time) its output is shown in your terminal.
 
+### Imported links
+
+yt-dlp also does every [link import](downloading.md#importing-a-link). It first lists the link (`--dump-single-json --flat-playlist --no-playlist`), then runs once per item, in the same kind of temporary folder, roughly as:
+
+```bash
+yt-dlp --ignore-config --extract-audio --audio-format mp3 --audio-quality 0 --no-playlist \
+  --match-filters "!is_live & extractor!*=?spotify" --max-downloads 1 \
+  --output "download.%(ext)s" --write-info-json --no-write-playlist-metafiles --write-thumbnail \
+  -- "https://www.youtube.com/watch?v=..."
+```
+
+The file is [tagged](metadata.md#imported-links) from `download.info.json`, FFmpeg crops the thumbnail for the cover art, and the file is then moved into the folder under its final name. Everything else in the temporary folder is deleted. For a page whose items have no links of their own, `--playlist-items N` picks one.
+
 ## Writing a new backend
 
 A backend is a subclass of `DownloadBackend` in [`src/spotarchive/backends/base.py`](../src/spotarchive/backends/base.py). Keep everything specific to your helper inside its own module in `src/spotarchive/backends/`.
@@ -194,5 +207,7 @@ What a backend gets and must do:
 - With `shows_own_output = True` the helper may write to the terminal when `events.show_output` is true (one song at a time); Spotarchive then prints a `[n/total]` line before each song instead of drawing a progress bar. When `events.show_output` is false, capture the helper's output instead.
 
 Tests for a backend must not download real audio: fake the helper (see `tests/test_somedl.py` and `tests/test_ytdlp.py`, which replace `subprocess.Popen` and `subprocess.run`).
+
+A backend can also support [link imports](downloading.md#importing-a-link) by setting `can_import = True` and implementing `list_url(url)` and `import_item(item, folder, events)` (see their docstrings in `base.py`; they must refuse Spotify). Imports currently always use the backend named by `IMPORT_BACKEND` in `backends/__init__.py`, which is yt-dlp.
 
 Back to the [documentation index](README.md).
