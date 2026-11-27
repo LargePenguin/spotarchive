@@ -239,28 +239,3 @@ def test_warns_without_deno(monkeypatch):
     assert "Deno" in backend().warnings()[0]
     monkeypatch.setattr(ytdlp.shutil, "which", lambda name, path=None: "/usr/bin/deno")
     assert backend().warnings() == []
-
-
-def test_download_url_gets_exactly_the_link(tmp_path, run):
-    url = "https://video.example.com/watch?v=dummy"
-
-    files = backend(extra_args=("--limit-rate", "1M")).download_url(url, tmp_path)
-
-    assert files == [tmp_path / "download.mp3"]
-    # Untagged: the caller tags each copy.
-    assert files[0].read_bytes() == SILENT_MP3
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["download.mp3"]
-    cmd = run.calls[0]["cmd"]
-    assert cmd[-2:] == ["--", url]
-    assert cmd[cmd.index("--match-filters") + 1] == "!is_live & !playlist_index"
-    assert "--no-playlist" in cmd and "--limit-rate" in cmd
-    assert "--max-downloads" not in cmd and not any(a.startswith("ytsearch") for a in cmd)
-
-
-def test_download_url_of_a_playlist_fails(tmp_path, run):
-    run.extension, run.returncode = None, 0
-
-    with pytest.raises(DownloadFailed, match="not a playlist"):
-        backend().download_url("https://video.example.com/playlist?list=dummy", tmp_path)
-
-    assert list(tmp_path.iterdir()) == []

@@ -26,8 +26,9 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from spotarchive.backends import Song, TaggingFailed
-from spotarchive.backends.util import safe_name
+from spotarchive.backends.util import SPOTIFY_REFUSAL, fit_name, is_spotify_url, safe_name
 from spotarchive.download import (
+    RECORD_FILENAME,
     expected_stems,
     find_present,
     load_record,
@@ -39,8 +40,6 @@ from spotarchive.setlist import SETLIST_FILENAME
 from spotarchive.tags import write_setlist_tags
 
 SEPARATOR = " - "
-# Room for the extension and a " (2)" within the usual 255 file name limit.
-_MAX_STEM_BYTES = 200
 
 
 @dataclass
@@ -79,28 +78,20 @@ def check_arguments(query: str, url: str) -> str | None:
     artist, _, title = query.strip().partition(SEPARATOR)
     if not artist.strip() or not title.strip():
         return f'--overwrite takes the song as "Artist - Song", not {query!r}'
+    if is_spotify_url(url):
+        return f"{SPOTIFY_REFUSAL} Give a link to another site"
     try:
         parts = urlsplit(url.strip())
-        host = (parts.hostname or "").lower()
+        valid = parts.scheme in ("http", "https") and bool(parts.hostname)
     except ValueError:
-        host, parts = "", None
-    if parts is None or parts.scheme not in ("http", "https") or not host:
-        return f'--overwrite takes the song, then an http(s) link, not {url!r}'
-    if host == "spotify.link" or host == "spotify.com" or host.endswith(".spotify.com"):
-        return "Spotarchive never takes audio from Spotify; give a link to another site"
-    return None
+        valid = False
+    return None if valid else f"--overwrite takes the song, then an http(s) link, not {url!r}"
 
 
 def find_copies(data_dir: Path, query: str, extensions: frozenset[str]) -> Search:
     """Every copy of the song *query* ("Artist - Song") in *data_dir* and its subfolders."""
     wanted = normalize(query)
-    folders = []
-    if data_dir.is_dir():
-        # data_dir itself: only the files lying directly in it.
-        folders = [data_dir] + sorted(
-            p for p in data_dir.iterdir()
-            if p.is_dir() and not p.name.startswith((".", "browser-profile"))
-        )
+    folders = _libraries(data_dir)
 
     libraries = []
     for folder in folders:
@@ -111,12 +102,34 @@ def find_copies(data_dir: Path, query: str, extensions: frozenset[str]) -> Searc
 
     search = Search()
     for folder, songs, matched in libraries:
-        _search_folder(search, folder, folder == data_dir, songs, matched, known, query, wanted, extensions)
+        # Files of a folder searched on its own aren't this one's.
+        nested = [f for f in folders if f != folder and f.is_relative_to(folder)]
+        _search_folder(search, folder, folder == data_dir, nested, songs, matched, known, query, wanted, extensions)
     return search
 
 
-def _search_folder(search: Search, folder: Path, top_level: bool, songs: list[Song], matched: list[Song],
-                   known: bool, query: str, wanted: str, extensions: frozenset[str]) -> None:
+def _libraries(data_dir: Path) -> list[Path]:
+    """The folders to search, each with its own record.
+
+    *data_dir* (only for the files lying directly in it), every folder in it,
+    and deeper folders with a download record, like imported playlists.
+    """
+    if not data_dir.is_dir():
+        return []
+    top = [
+        p for p in data_dir.iterdir()
+        if p.is_dir() and not p.name.startswith((".", "browser-profile"))
+    ]
+    deeper = [
+        record.parent for folder in top for record in folder.rglob(RECORD_FILENAME)
+        if record.parent != folder
+        and not any(part.startswith(".") for part in record.parent.relative_to(folder).parts)
+    ]
+    return [data_dir, *sorted(top + deeper)]
+
+
+def _search_folder(search: Search, folder: Path, top_level: bool, nested: list[Path], songs: list[Song],
+                   matched: list[Song], known: bool, query: str, wanted: str, extensions: frozenset[str]) -> None:
     record = load_record(folder)
     by_key = {s.key: s for s in songs}
     paths = folder.glob("*") if top_level else folder.rglob("*")
@@ -124,6 +137,8 @@ def _search_folder(search: Search, folder: Path, top_level: bool, songs: list[So
     for p in sorted(paths):
         relative = p.relative_to(folder)
         hidden = any(part.startswith(".") for part in relative.parts)
+        if any(p.is_relative_to(n) for n in nested):
+            continue
         if not hidden and p.is_file() and p.suffix.lower() in extensions and normalize(p.stem) == wanted:
             named.append(relative.as_posix())
 
@@ -165,7 +180,7 @@ def _search_folder(search: Search, folder: Path, top_level: bool, songs: list[So
                 else:
                     add(song, True, [file], [song.key])
                 continue
-        if owners and known:
+        if owners and known and songs:
             label = record[owners[0]].get("label") or "another song"
             search.notes.append(
                 f"Left {folder / file} alone: it was downloaded as {label!r}. "
@@ -197,15 +212,16 @@ def replace_copy(copy: Copy, source: Path, url: str) -> Replaced:
     """
     first = Path(copy.files[0])
     directory = copy.folder / first.parent
-    stem = _shorten(safe_name(copy.song.label) if copy.from_setlist else first.stem)
+    stem = safe_name(copy.song.label) if copy.from_setlist else first.stem
     suffix = source.suffix.lower()
     old = {copy.folder / f for f in copy.files}
-    target = directory / f"{stem}{suffix}"
+    # The extension is appended so that a dot in the title isn't read as one.
+    target = directory / fit_name(directory, stem + suffix)
     number = 1
     # Never write over a file that isn't being replaced.
     while target.exists() and target not in old:
         number += 1
-        target = directory / f"{stem} ({number}){suffix}"
+        target = directory / fit_name(directory, stem + suffix, keep=f" ({number})")
 
     warnings = []
     tagged = False
@@ -267,8 +283,3 @@ def _update_record(copy: Copy, new: str, url: str, tagged: bool) -> list[str]:
     if changed:
         save_record(copy.folder, record)
     return warnings
-
-
-def _shorten(stem: str) -> str:
-    cut = stem.encode("utf-8")[:_MAX_STEM_BYTES].decode("utf-8", errors="ignore")
-    return cut.rstrip(" .") or "song"

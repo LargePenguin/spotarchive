@@ -41,6 +41,7 @@ Folder names are the playlist names, adjusted to be valid on both Linux and Wind
 - `< > : " / \ | ? *` and control characters become `_`, and repeated whitespace collapses to one space.
 - Trailing dots and spaces are removed, and names are capped at 100 characters.
 - Names Windows reserves (`CON`, `NUL`, `COM1`, ...) get a leading `_`.
+- `imports` is kept for [imported links](downloading.md#importing-a-link): a playlist with that name (ignoring case) gets its ID appended, and one already in that folder is moved on the next fetch, even if it isn't selected then. With another [`import_dir`](configuration.md#import_dir), the name kept free [follows that setting](downloading.md#the-import-folder-and-playlists).
 - Two playlists whose names would clash (ignoring case) are told apart by appending the playlist ID, e.g. `Chill (abc123)`. A playlist that already had the plain name keeps it.
 
 When you rename a playlist on Spotify, its folder is renamed on the next fetch, together with anything already downloaded into it.

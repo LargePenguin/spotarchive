@@ -5,43 +5,43 @@ import pytest
 from conftest import SILENT_MP3, FakeBackend
 
 from spotarchive import cli, override
-from spotarchive.backends import DownloadFailed
-from spotarchive.config import Config
+from spotarchive.backends import DownloadFailed, ImportItem, ImportListing
 from spotarchive.download import load_record, prepare_playlist, save_record
 from spotarchive.meta import fix_playlist_metadata
 from spotarchive.session import YouTubeSession
 from spotarchive.setlist import write_setlist
 from spotarchive.spotify.models import Track
 
-REAL_MAKE_URL_BACKEND = cli.make_url_backend
 URL = "https://video.example.com/watch?v=dummy"
 QUERY = "Fake Artist - Right Song"
 NEW_AUDIO = SILENT_MP3 + SILENT_MP3[:417]
 
 
-class UrlBackend(FakeBackend):
-    can_download_url = True
+class LinkBackend(FakeBackend):
+    can_import = True
 
-    def __init__(self, error=None, count=1):
+    def __init__(self, error=None, playlist=None):
         super().__init__()
         self.error = error
-        self.count = count
+        self.playlist = playlist
         self.urls = []
 
-    def download_url(self, url, folder, events=None):
-        self.urls.append(url)
+    def list_url(self, url):
+        return ImportListing((ImportItem(url, "Video Title"),), self.playlist)
+
+    def import_item(self, item, folder, events=None):
+        self.urls.append(item.url)
         if self.error:
             raise DownloadFailed(self.error)
-        files = [folder / f"download{i or ''}.mp3" for i in range(self.count)]
-        for file in files:
-            file.write_bytes(NEW_AUDIO)
-        return files
+        file = folder / "Uploader - Video Title.mp3"
+        file.write_bytes(NEW_AUDIO)
+        return [file]
 
 
 @pytest.fixture(autouse=True)
 def url_backend(monkeypatch):
-    backend = UrlBackend()
-    monkeypatch.setattr(cli, "make_url_backend", lambda settings: backend)
+    backend = LinkBackend()
+    monkeypatch.setattr(cli, "make_importer", lambda settings: backend)
     return backend
 
 
@@ -240,9 +240,9 @@ def test_nothing_to_replace_downloads_nothing(tmp_path, url_backend, tracks):
     assert url_backend.urls == []
 
 
-@pytest.mark.parametrize("failing", [{"error": "video unavailable"}, {"count": 0}, {"count": 2}])
+@pytest.mark.parametrize("failing", [{"error": "video unavailable"}, {"playlist": "Fake Mix"}])
 def test_a_failed_download_changes_nothing(tmp_path, monkeypatch, failing):
-    monkeypatch.setattr(cli, "make_url_backend", lambda settings: UrlBackend(**failing))
+    monkeypatch.setattr(cli, "make_importer", lambda settings: LinkBackend(**failing))
     song = track("Right Song")
     folder = playlist(tmp_path, "One", [song], ["wrong.mp3"], [(song, ["wrong.mp3"])])
     before = load_record(folder)
@@ -295,6 +295,7 @@ def test_the_youtube_login_is_handed_over(tmp_path, url_backend, monkeypatch):
     ["-o", QUERY, URL, "-m"],
     ["-o", QUERY, URL, "-t", "2"],
     ["-o", QUERY, URL, "-u"],
+    ["-o", QUERY, URL, URL],
 ])
 def test_bad_command_lines(tmp_path, url_backend, argv):
     with pytest.raises(SystemExit):
@@ -302,8 +303,18 @@ def test_bad_command_lines(tmp_path, url_backend, argv):
     assert url_backend.urls == []
 
 
-@pytest.mark.parametrize("settings", [
-    Config(), Config(fallback=""), Config(backend="ytdlp", fallback=""), Config(fallback="somedl", backend="ytdlp"),
-])
-def test_links_are_downloaded_with_ytdlp_whatever_is_configured(settings):
-    assert REAL_MAKE_URL_BACKEND(settings).name == "ytdlp"
+def test_imported_files_are_replaced_with_their_folders_record(tmp_path):
+    folder = tmp_path / "imports" / "Fake Mix"
+    folder.mkdir(parents=True)
+    (folder / f"{QUERY}.mp3").write_bytes(SILENT_MP3)
+    save_record(folder, {"https://video.example.com/one": {"label": "Video", "files": [f"{QUERY}.mp3"]}})
+    # A playlist with the song doesn't make the import "another song".
+    playlist(tmp_path, "One", [track("Right Song")], [f"{QUERY}.mp3"])
+
+    assert run(tmp_path) == 0
+
+    assert is_new(folder / f"{QUERY}.mp3")
+    # Still keyed by the link, so importing it again finds the file there.
+    entry = load_record(folder)["https://video.example.com/one"]
+    assert (entry["files"], entry["override"]) == ([f"{QUERY}.mp3"], URL)
+    assert not (tmp_path / "imports" / ".downloads.json").exists()

@@ -8,6 +8,10 @@
 # Folder that holds session.json and one folder per playlist. A relative path
 # is relative to the folder you run spotarchive in.
 data_dir = "data"
+# Folder that links imported with `spotarchive -d LINK` go to. An absolute path
+# (or one starting with ~) is used as it is. Otherwise, it is assumed to be a
+# path relative to data_dir.
+import_dir = "imports"
 
 [login]
 # Browser for the Spotify login window: "chrome", "edge", "brave", "vivaldi",

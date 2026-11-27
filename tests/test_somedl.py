@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from spotarchive.backends import BackendUnavailable, DownloadEvents, DownloadFailed, Song, TaggingFailed, get_backend, somedl
+from spotarchive.backends import BackendUnavailable, DownloadEvents, DownloadFailed, Song, TaggingFailed, get_backend, somedl, util
 from spotarchive.backends.somedl import SomeDLBackend
 from spotarchive.session import YouTubeSession
 
@@ -117,31 +117,31 @@ def test_staging_folder_name_is_short(tmp_path, run):
 
 
 def test_fit_name_leaves_a_fitting_name_alone(tmp_path):
-    assert somedl.fit_name(tmp_path, "Fake Artist - Song A.mp3") == "Fake Artist - Song A.mp3"
+    assert util.fit_name(tmp_path, "Fake Artist - Song A.mp3") == "Fake Artist - Song A.mp3"
 
 
 def test_fit_name_cuts_the_stem_and_keeps_the_extension(tmp_path, monkeypatch):
-    monkeypatch.setattr(somedl, "path_limit", lambda: len(str(tmp_path)) + 1 + 20)
-    name = somedl.fit_name(tmp_path, "A very long song title that goes on.mp3")
-    assert name.endswith(".mp3") and somedl._size(name) <= 20 and name.startswith("A very long")
+    monkeypatch.setattr(util, "path_limit", lambda: len(str(tmp_path)) + 1 + 20)
+    name = util.fit_name(tmp_path, "A very long song title that goes on.mp3")
+    assert name.endswith(".mp3") and util._size(name) <= 20 and name.startswith("A very long")
 
 
 def test_fit_name_counts_in_the_units_of_the_file_system(tmp_path, monkeypatch):
-    monkeypatch.setattr(somedl, "path_limit", lambda: 1_000_000)
-    monkeypatch.setattr(somedl, "_NAME_LIMIT", 20)
-    name = somedl.fit_name(tmp_path, "ñandú ñandú ñandú ñandú.mp3")
-    assert name.endswith(".mp3") and somedl._size(name) <= 20
+    monkeypatch.setattr(util, "path_limit", lambda: 1_000_000)
+    monkeypatch.setattr(util, "_NAME_LIMIT", 20)
+    name = util.fit_name(tmp_path, "ñandú ñandú ñandú ñandú.mp3")
+    assert name.endswith(".mp3") and util._size(name) <= 20
     name.encode("utf-8")  # still valid text, never cut in the middle of a character
 
 
 def test_fit_name_fails_without_room(tmp_path, monkeypatch):
-    monkeypatch.setattr(somedl, "path_limit", lambda: len(str(tmp_path)) + 3)
+    monkeypatch.setattr(util, "path_limit", lambda: len(str(tmp_path)) + 3)
     with pytest.raises(DownloadFailed, match="no room"):
-        somedl.fit_name(tmp_path, "Song.mp3")
+        util.fit_name(tmp_path, "Song.mp3")
 
 
 def test_long_file_names_are_shortened_with_a_warning(tmp_path, run, monkeypatch):
-    monkeypatch.setattr(somedl, "path_limit", lambda: len(str(tmp_path)) + 1 + 30)
+    monkeypatch.setattr(util, "path_limit", lambda: len(str(tmp_path)) + 1 + 30)
     run.filename = "Fake Artist - A song title that is far too long.mp3"
     events = Events()
     (moved,) = backend().download(SONG, tmp_path, events)

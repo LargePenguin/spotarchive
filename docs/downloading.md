@@ -8,7 +8,10 @@ spotarchive -fd            # fetch (choosing playlists), then download
 spotarchive -fnd           # fetch the previous selection, then download
 spotarchive -d -t 4        # download 4 songs at once
 spotarchive -d -t 1        # one song at a time, showing SomeDL's own output
+spotarchive -d "https://..."   # import a link instead (see below)
 ```
+
+The rest of this page is about downloading the setlists; [importing a link](#importing-a-link) works on its own.
 
 You need to have [fetched](fetching.md) the playlists first, and the backend has to be installed (see [SomeDL](backends.md#somedl)). Downloading itself doesn't talk to Spotify, so it works without a login once the setlists exist.
 
@@ -120,6 +123,34 @@ Failed songs aren't recorded, so the next `spotarchive --download` tries exactly
 > [!TIP]
 > Downloading hundreds of songs quickly can get your IP temporarily blocked by YouTube. If that happens, wait a while and run `spotarchive --download` again; it picks up where it stopped.
 
+## Importing a link
+
+With a link, `--download` downloads what the link points to instead of the setlists:
+
+```bash
+spotarchive -d "https://www.youtube.com/watch?v=..."       # one video
+spotarchive -d "https://www.youtube.com/playlist?list=..."  # a whole playlist or album
+spotarchive -d -t 4 "https://..."                           # 4 items at once
+```
+
+> [!TIP]
+> Put the link in quotes: shells treat `&` and `?`, which YouTube links often contain, specially.
+
+- **What gets downloaded** is exactly what is at the link; nothing is searched for. A playlist or album page downloads every item in it. A video link that also names a playlist (`watch?v=...&list=...`, as when you copy a link while a playlist or mix plays) downloads only that video. A page that only lists other playlists is refused: use the link of one of them. Live streams are skipped (and reported as failed).
+- **Sites:** YouTube and YouTube Music, plus any other site [yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md). Other sites are best effort. Links to Spotify are refused: Spotarchive never downloads audio from Spotify.
+- **Where it goes:** the [`import_dir`](configuration.md#import_dir) folder, by default `imports` in the [download folder](configuration.md#data_dir). A playlist gets a subfolder named after it (adjusted like [playlist folder names](fetching.md#folders)); playlists with the same name share it.
+- **Names and tags** come from what the site says about the item; see [metadata of imported links](metadata.md#imported-links). Files are named `Artist - Title` after the first artist. A file that is already there is never replaced: the new one gets the video's ID, e.g. `Artist - Title [abc123].mp3`.
+- **Backend:** links are always downloaded with [yt-dlp](backends.md#yt-dlp), whatever `backend` and `fallback` say, so SomeDL isn't used. The `executable`, `audio_format` and `extra_args` settings of [`[backends.ytdlp]`](configuration.md#backendsytdlp) apply; `search_results` and `length_tolerance` don't.
+- **Running it again** with the same link downloads only the items that are new, failed or deleted. This goes by the folder's [download record](#the-downloadsjson-record), keyed by each item's link, not by file names. So the same video imported on its own and as part of a playlist is saved in both folders, and deleting a record makes the next import download another copy.
+
+Importing doesn't use Spotify, so it needs no login or fetched playlists. A [YouTube login](authentication.md#logging-in-to-youtube-optional) is used if you have one. [Threads](#several-songs-at-once), [failures](#when-a-song-fails) and the [log file](#the-log-file) work as for setlists. `-d LINK` can't be combined with `--fetch`, `--login`, `--meta` or `--update`.
+
+### The import folder and playlists
+
+When [`import_dir`](configuration.md#import_dir) is inside the download folder, the folder directly in the download folder that is or holds it (`imports` by default; `music` for `import_dir = "music/links"`) is never used for a Spotify playlist's folder: a playlist named like that gets [its ID appended](fetching.md#folders). If a playlist already has that folder, from before imports or before you changed the setting, importing is refused until the next `spotarchive --fetch` has moved the playlist, with its files, out of it. If the playlist is no longer in your library, rename or move the folder yourself.
+
+An `import_dir` outside the download folder reserves no playlist folder name. In either case, a folder that holds a `setlist.csv` is never imported into.
+
 ## Fixing a wrong match
 
 Backends search by name, so now and then one downloads the wrong track: a cover, a remix, a different song altogether. Find the right one yourself and give Spotarchive its link:
@@ -136,7 +167,7 @@ Put both in quotes (links often contain `&`). The audio at the link is downloade
 
 ### Which files are replaced
 
-Every folder in the download folder is searched, including playlists that aren't currently selected, with their subfolders, plus files lying directly in the download folder. Folders whose name starts with `.` are skipped. Case is ignored, and characters that aren't allowed in file names count as `_`. A copy is:
+Every folder in the download folder is searched, including playlists that aren't currently selected and [imports](#importing-a-link), with their subfolders, plus files lying directly in the download folder. An [`import_dir`](configuration.md#import_dir) outside the download folder isn't searched. Folders whose name starts with `.` are skipped. Case is ignored, and characters that aren't allowed in file names count as `_`. A copy is:
 
 - **The song in a setlist.** `"Artist Name - Song Name"` is compared with each `setlist.csv` row (the artist can be the first one or all of them, as for [skipping](#skipping-songs-you-already-have)). Its files come from the [download record](#the-downloadsjson-record), so they are found even when the backend named them after the wrong track it found. If different versions of a song in your playlists share that artist and title, they all get your link's audio.
 - **A file named like that**, with or without a setlist.
@@ -146,12 +177,12 @@ You can also give the name of the *wrong file* (say `"Other Band - Other Song.mp
 ### What the new file looks like
 
 - It is named `Artist - Song` after the setlist row, in the folder the old file was in. A file that matched no setlist row keeps its name. If another song's file already has the name, ` (2)` is added, so nothing else is overwritten.
-- It gets the setlist's tags (title, artists, album, release date; each playlist's own). Without a setlist row, only the artist and title you typed are set. There is no cover art or lyrics.
+- It gets the setlist's tags (title, artists, album, release date; each playlist's own). Without a setlist row, only the artist and title you typed replace the link's. Anything else comes from the link as for [imported links](metadata.md#imported-links), including cover art for official tracks. There are no lyrics.
 - The record entry notes your link as `"override"`. [Metadata cleanup](metadata.md#songs-you-replaced) then never asks a download helper about the song, which could bring back the wrong match's tags, and later downloads skip it as usual.
 
 ### How the link is downloaded
 
-[yt-dlp](backends.md#yt-dlp) downloads exactly what the link points to, whichever backends you've configured: nothing is searched for, and the [length check](configuration.md#backendsytdlp) doesn't apply. The audio format and other [`[backends.ytdlp]`](configuration.md#backendsytdlp) settings do, so the new file's type can differ from the old one's. A [YouTube login](authentication.md#logging-in-to-youtube-optional) is used if you have one. Any site yt-dlp supports works, except Spotify: Spotarchive never takes audio from there. The link must be a single video or track; playlists and live streams are refused. If the download fails, nothing is changed.
+The link is downloaded as a [link import](#importing-a-link) of one item: [yt-dlp](backends.md#yt-dlp) gets exactly what the link points to, whichever backends you've configured. Nothing is searched for, and the [length check](configuration.md#backendsytdlp) doesn't apply. The audio format and other [`[backends.ytdlp]`](configuration.md#backendsytdlp) settings do, so the new file's type can differ from the old one's. A [YouTube login](authentication.md#logging-in-to-youtube-optional) is used if you have one. Any site yt-dlp supports works, except Spotify: Spotarchive never takes audio from there. The link must be a single video or track (a video link that also names a playlist means the video); playlists and live streams are refused. If the download fails, nothing is changed.
 
 > [!NOTE]
 > Only files that exist are replaced; the link isn't remembered for later downloads. If a playlist lists the song but doesn't have it yet, Spotarchive tells you; run `spotarchive -d` and then the same `--overwrite` again. The same goes for a playlist you add later. If you delete a replaced file, the next download searches for the song with the backend again.

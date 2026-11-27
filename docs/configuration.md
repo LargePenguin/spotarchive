@@ -6,6 +6,7 @@ Spotarchive reads its settings from `spotarchive.toml`, a [TOML](https://toml.io
 
 ```toml
 data_dir = "data"
+import_dir = "imports"
 
 [download]
 backend = "somedl"
@@ -44,6 +45,21 @@ data_dir = "~/Music/spotarchive"
 ```
 
 Moving `data_dir` doesn't move existing files: move the old folder's contents yourself, or you'll have to log in and fetch again.
+
+### `import_dir`
+
+The folder [imported links](downloading.md#importing-a-link) (`spotarchive -d LINK`) go to. A relative path is relative to [`data_dir`](#data_dir); an absolute path, including one starting with `~`, is used as it is. Missing folders are created. Default: `"imports"`.
+
+```toml
+import_dir = "~/Music/imported"
+```
+
+> [!TIP]
+> On Windows, write paths with forward slashes (`"D:/Music/imported"`) or in single quotes (`'D:\Music\imported'`): in a double-quoted TOML string, a backslash starts an escape sequence.
+
+- It can't be `data_dir` itself or a folder that contains it.
+- If it is inside `data_dir`, the folder directly in `data_dir` that is or holds it is never used for a Spotify playlist: see [the import folder and playlists](downloading.md#the-import-folder-and-playlists).
+- Changing it doesn't move earlier imports. Move the old folder's contents yourself, including the hidden `.downloads.json` files, or importing the same link again downloads another copy.
 
 ### `[login]`
 
@@ -89,6 +105,8 @@ Switching `flat` or `audio_format` doesn't redownload anything: songs already th
 | `search_results` | `5` | How many YouTube search results to look through for a video of the right length. |
 | `length_tolerance` | `30` | Seconds a video may be shorter or longer than the song on Spotify. `0`: any length (the first result). See [how Spotarchive runs yt-dlp](backends.md#how-spotarchive-runs-it-1). |
 | `extra_args` | `[]` | Extra command-line options for every download, e.g. `["--sleep-requests", "1"]`. yt-dlp's own config files are ignored, so put options here. |
+
+[Link imports](downloading.md#importing-a-link) always use yt-dlp, with `executable`, `audio_format` and `extra_args` from this table.
 
 ## Errors
 

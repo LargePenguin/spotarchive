@@ -8,7 +8,7 @@ spotarchive -dm         # download what's missing, then fix the tags
 spotarchive -fndm       # fetch the previous selection, download, fix the tags
 ```
 
-Plain `spotarchive` runs it too, after downloading. It works on every selected playlist that has been [fetched](fetching.md), and on the songs of its `setlist.csv` that are in the folder: the ones Spotarchive [downloaded](downloading.md) and the ones it [recognizes by name](downloading.md#skipping-songs-you-already-have), such as files you added yourself. It doesn't talk to Spotify.
+Plain `spotarchive` runs it too, after downloading. [Imported links](#imported-links) are tagged as they download, and `--meta` leaves them alone. It works on every selected playlist that has been [fetched](fetching.md), and on the songs of its `setlist.csv` that are in the folder: the ones Spotarchive [downloaded](downloading.md) and the ones it [recognizes by name](downloading.md#skipping-songs-you-already-have), such as files you added yourself. It doesn't talk to Spotify.
 
 When some downloads fail during `-dm` or plain `spotarchive`, the metadata of the songs that did download is still fixed; the run then ends with the download error.
 
@@ -61,5 +61,24 @@ Road Trip ━━━━━━━━━━━━━━━━━━━━━━━�
 ```
 
 *Fixed* songs were retagged, *already fine* ones were left alone. Failed songs are tried again on the next run. Spotarchive exits with code `1` when any song or playlist failed.
+
+## Imported links
+
+A [link you import](downloading.md#importing-a-link) has no setlist, so its tags come only from what yt-dlp reports about it. No other service is searched, so a file is never given another recording's tags. The `[metadata]` settings don't apply.
+
+**When the site names both the track and the artists**, as YouTube does for official audio (the "art tracks" of YouTube Music and the `Artist - Topic` channels), these are used as they are: title, artists, album, release date, and track number and genre if given. The video's thumbnail, cut to a centered square, becomes the cover art.
+
+**Otherwise** (music videos and ordinary uploads, typically) the tags are guessed:
+
+- If the site names an artist, it is used. If not, a title like `Artist - Title` is split at the first dash with spaces around it.
+- Bracketed labels about the video are removed from the title, such as `(Official Video)`, `[Lyric Video]`, `(Visualizer)` or `(4K Remaster)`. Ones about the recording stay: `(Live)`, `(Remix)`, `(feat. ...)`, `(2011 Remaster)`.
+- With no artist from either, the channel's or uploader's name is the artist (without ` - Topic`).
+- Album, release date, track number and genre are set only if the site gives them. The upload date is never used as the release date, nor is the date a YouTube premiere or stream aired.
+- No cover art is added.
+
+> [!WARNING]
+> A guess can be wrong. A video titled `Title - Artist`, for example, ends up with the two swapped. Check these imports and fix the tags in a tag editor if needed.
+
+Cover art and tags work for MP3, M4A, FLAC, Ogg Vorbis and Opus. With other formats, or when tagging or the cover fails, the file is kept and a warning is logged. YouTube has no lyrics or ISRC to offer. Only YouTube has been checked against live links; what other sites report varies.
 
 Back to the [documentation index](README.md).

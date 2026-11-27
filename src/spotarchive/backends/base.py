@@ -27,6 +27,32 @@ class TaggingFailed(Exception):
     """One file's metadata couldn't be fixed; the others can still be tried."""
 
 
+@dataclass(frozen=True)
+class ImportItem:
+    """One thing a link points to, see :meth:`DownloadBackend.list_url`."""
+
+    # The link to download it from.
+    url: str
+    title: str = ""
+    # Set when the item has no link of its own: it's the *index*-th (from 1)
+    # item of the page at *url*.
+    index: int | None = None
+
+    @property
+    def key(self) -> str:
+        """Identifies the item in the download record."""
+        return self.url if self.index is None else f"{self.url}#{self.index}"
+
+
+@dataclass(frozen=True)
+class ImportListing:
+    """What a link points to."""
+
+    items: tuple[ImportItem, ...]
+    # The playlist's (or album's) name; None when the link is a single item.
+    playlist: str | None = None
+
+
 class DownloadEvents:
     """What a backend can report while it downloads one song.
 
@@ -110,8 +136,8 @@ class DownloadBackend(ABC):
     # True when files from :meth:`download` already carry the helper's own
     # metadata, so they don't need :meth:`tag` afterwards.
     tags_downloads: bool = False
-    # True when the helper can download a link the user picked, see :meth:`download_url`.
-    can_download_url: bool = False
+    # True when the helper can download any link, see :meth:`list_url`.
+    can_import: bool = False
     # The YouTube login handed over by :meth:`use_youtube_login`, if any.
     youtube_login: YouTubeSession | None = None
 
@@ -145,14 +171,22 @@ class DownloadBackend(ABC):
         warnings and errors go.
         """
 
-    def download_url(self, url: str, folder: Path, events: DownloadEvents | None = None) -> list[Path]:
-        """Download the audio of the single track at *url* into *folder*; return the new files.
+    def list_url(self, url: str) -> ImportListing:
+        """What *url* points to, without downloading it.
 
-        Only called when :attr:`can_download_url` is true (``--overwrite``).
-        Get exactly what the link points to: no searching for a better match,
-        and no metadata (Spotarchive tags the files itself). A link to a
-        playlist, or anything else that isn't one track, is a failure. Raise
-        :class:`DownloadFailed` when nothing could be downloaded.
+        Only called when :attr:`can_import` is true. A link to one item that
+        also names a playlist means just the item. Raise
+        :class:`DownloadFailed` when the link can't be used, which includes
+        anything on Spotify.
+        """
+        raise NotImplementedError
+
+    def import_item(self, item: ImportItem, folder: Path, events: DownloadEvents | None = None) -> list[Path]:
+        """Download exactly *item* into *folder*, tagged, and return the new audio files.
+
+        Like :meth:`download` (it may run in several threads at once), but
+        there is no setlist: the file name and tags come from what the link
+        itself says. Never replace a file that is already there.
         """
         raise NotImplementedError
 

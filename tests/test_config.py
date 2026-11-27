@@ -35,6 +35,7 @@ def test_example_file_matches_the_defaults():
     assert (settings.data_dir, settings.backend, settings.metadata_source, settings.threads) == (
         Config.data_dir, Config.backend, Config.metadata_source, Config.threads)
     assert settings.fallback == Config.fallback
+    assert settings.import_dir == Config().import_dir
     backend = get_backend(settings.backend, **settings.options_for(settings.backend))
     default = SomeDLBackend()
     assert vars(backend) == vars(default)
@@ -118,3 +119,26 @@ def test_fallback(tmp_path):
     assert (settings.backend, settings.fallback) == ("ytdlp", "somedl")
     # Only the backend set to the default fallback: no fallback, not an error.
     assert config.load(write(tmp_path, "[download]\nbackend = 'ytdlp'")).fallback == ""
+
+
+def test_import_dir(tmp_path):
+    data = tmp_path / "data"
+    assert Config().imports_path(data) == data / "imports"
+    settings = config.load(write(tmp_path, 'import_dir = "music/links"'))
+    assert settings.imports_path(data) == data / "music" / "links"
+    outside = tmp_path / "elsewhere"
+    settings = config.load(write(tmp_path, f'import_dir = "{outside.as_posix()}"'))
+    assert settings.imports_path(data) == outside
+    settings = config.load(write(tmp_path, 'import_dir = "~/links"'))
+    assert settings.imports_path(data) == Path("~/links").expanduser()
+
+
+@pytest.mark.parametrize("import_dir", [".", "..", "imports/.."])
+def test_import_dir_cant_be_or_hold_the_data_folder(tmp_path, import_dir):
+    with pytest.raises(ConfigError, match="import_dir can't be data_dir"):
+        config.load(write(tmp_path, f'import_dir = "{import_dir}"'))
+
+
+def test_empty_import_dir(tmp_path):
+    with pytest.raises(ConfigError, match="import_dir must be a non-empty string"):
+        config.load(write(tmp_path, 'import_dir = ""'))

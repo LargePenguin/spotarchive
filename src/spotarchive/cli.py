@@ -13,7 +13,7 @@ import requests
 
 from spotarchive import __version__, config, override, ui, update
 from spotarchive.backends import (
-    URL_BACKEND,
+    IMPORT_BACKEND,
     BackendUnavailable,
     DownloadBackend,
     DownloadEvents,
@@ -23,6 +23,7 @@ from spotarchive.backends import (
 from spotarchive.config import Config, ConfigError
 from spotarchive.download import (
     DownloadListener,
+    PlaylistDownload,
     SongDownload,
     download_all,
     prepare_playlist,
@@ -30,6 +31,14 @@ from spotarchive.download import (
 )
 from spotarchive.downloadlog import DownloadLog
 from spotarchive.fetch import fetch_setlists, update_selection
+from spotarchive.importer import (
+    ImportRefused,
+    LinkImporter,
+    check_imports_root,
+    check_link,
+    import_folder,
+    prepare_import,
+)
 from spotarchive.meta import PlaylistMeta, fix_playlist_metadata
 from spotarchive.session import SessionError, SessionStore
 from spotarchive.spotify.auth import (
@@ -83,7 +92,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "-d", "--download", action="store_true",
-        help="download the songs of the fetched setlists that aren't there yet",
+        help="download the songs of the fetched setlists that aren't there yet; "
+             "with a LINK, download what it points to instead",
+    )
+    # Not -d's value: argparse would then read -dm as -d with the value "m".
+    parser.add_argument(
+        "link", nargs="?", metavar="LINK",
+        help="with --download: a YouTube (or other site yt-dlp supports) video or playlist to import",
     )
     parser.add_argument(
         "-m", "--meta", action="store_true",
@@ -253,7 +268,7 @@ def ensure_login(store: SessionStore, browser: str = "") -> None:
         run_spotify_login(store, browser)
 
 
-def run_fetch(store: SessionStore, data_dir: Path, noselect: bool) -> None:
+def run_fetch(store: SessionStore, data_dir: Path, settings: Config, noselect: bool) -> None:
     client = make_client(store)
     with ui.working("Loading your playlists..."):
         playlists = client.playlists()
@@ -284,7 +299,9 @@ def run_fetch(store: SessionStore, data_dir: Path, noselect: bool) -> None:
                 bar.update(task, completed=done, total=total)
             return update
 
-        results = fetch_setlists(client, store, data_dir, chosen, progress_for)
+        results = fetch_setlists(
+            client, store, data_dir, chosen, progress_for, import_root=settings.imports_path(data_dir)
+        )
 
     failed = 0
     for result in results:
@@ -330,17 +347,12 @@ def _usable_fallback(settings: Config, log: DownloadLog | None = None) -> Downlo
         return None
 
 
-def run_download(store: SessionStore, data_dir: Path, settings: Config, threads: int | None = None) -> None:
-    """Download what's missing; *threads* (from --threads) overrides the configured number."""
-    folders = selected_folders(store, data_dir)
-    if not folders:
-        raise CliError("No playlists have been fetched yet; run `spotarchive --fetch` first.")
-    backend = make_backend(settings)
-    backend.check()
-    log = DownloadLog.for_run(data_dir)
-    fallback = _usable_fallback(settings, log)
-    # Every song is tried with these in turn.
-    backends = [backend] if fallback is None else [backend, fallback]
+def make_importer(settings: Config) -> DownloadBackend:
+    """The backend that imports links."""
+    return _build_backend(settings, IMPORT_BACKEND)
+
+
+def _show_warnings(backends: list[DownloadBackend], log: DownloadLog) -> None:
     shown = set()
     for warning in (w for b in backends for w in b.warnings()):
         # Both run yt-dlp, so they may warn the same.
@@ -348,25 +360,26 @@ def run_download(store: SessionStore, data_dir: Path, settings: Config, threads:
             shown.add(warning)
             ui.warn(warning)
             log.warning(warning)
-    expired = _hand_over_youtube_login(store, backends)
-    if expired:
+
+
+def _hand_over_youtube_login(store: SessionStore, backends: list[DownloadBackend], log: DownloadLog) -> None:
+    if youtube_auth.is_logged_in(store.youtube):
+        for b in backends:
+            b.use_youtube_login(store.youtube)
+    elif store.youtube is not None:
+        expired = (
+            "The saved YouTube login has expired, so age-restricted songs may fail; "
+            "run `spotarchive -l youtube` to log in again."
+        )
         ui.warn(expired)
         log.warning(expired)
-    threads = threads or settings.download_threads()
 
-    playlists, unfetched = [], 0
-    for name, folder in folders:
-        try:
-            playlists.append(prepare_playlist(backends, name, folder))
-        except FileNotFoundError as exc:
-            unfetched += 1
-            ui.error(f"{name}: {exc}")
-            log.error(str(exc), name)
-    pending = sum(len(p.pending) for p in playlists)
 
-    if fallback is not None and pending:
-        ui.info(f"Songs {backend.name} can't download are tried with {fallback.name}.")
+def _download(backends: list[DownloadBackend], playlists: list[PlaylistDownload], threads: int,
+              log: DownloadLog) -> None:
+    """Download the pending songs, with the display that fits."""
     if threads > 1:
+        pending = sum(len(p.pending) for p in playlists)
         if pending:
             ui.info(f"Downloading {pending} songs, up to {min(threads, pending)} at a time...")
         with ui.DownloadBoard() as board:
@@ -377,58 +390,50 @@ def run_download(store: SessionStore, data_dir: Path, settings: Config, threads:
         with ui.progress() as bar:
             download_all(backends, playlists, 1, _ProgressListener(bar), log)
 
-    failed_songs = 0
-    for result in playlists:
-        failed_songs += len(result.failed)
-        summary = f"{result.name}: {result.downloaded} downloaded, {result.already_present} already there"
-        if result.failed:
-            ui.error(f"{summary}, {len(result.failed)} failed")
-        else:
-            ui.ok(summary)
-    if playlists:
-        downloaded = sum(p.downloaded for p in playlists)
-        total = f"Total: {downloaded} downloaded, {failed_songs} failed"
-        (ui.error if failed_songs else ui.ok)(f"{total}, {sum(p.already_present for p in playlists)} already there.")
+
+def _show_log(log: DownloadLog) -> None:
     if log.written:
         ui.info(f"{_plural(log.errors, 'error')} and {_plural(log.warnings, 'warning')} were logged to {log.path}")
 
-    problems = []
-    if failed_songs:
-        problems.append(
-            f"{failed_songs} songs couldn't be downloaded; run `spotarchive --download` again to retry them."
+
+def run_import(store: SessionStore, data_dir: Path, settings: Config, link: str, threads: int | None = None) -> None:
+    """``--download LINK``: download what the link points to. Never talks to Spotify."""
+    link = check_link(link)
+    root = check_imports_root(store, data_dir, settings.imports_path(data_dir))
+    backend = make_importer(settings)
+    backend.check()
+    log = DownloadLog.for_run(data_dir)
+    _show_warnings([backend], log)
+    _hand_over_youtube_login(store, [backend], log)
+    try:
+        with ui.working("Reading the link..."):
+            listing = backend.list_url(link)
+    except DownloadFailed as exc:
+        raise CliError(f"Couldn't import the link: {exc}") from exc
+
+    folder = import_folder(root, listing)
+    try:
+        result = prepare_import(listing, folder)
+    except OSError as exc:
+        raise CliError(f"Can't use the import folder {folder}: {exc}") from exc
+    _download([LinkImporter(backend)], [result], threads or settings.download_threads(), log)
+
+    summary = f"{result.name}: {result.downloaded} downloaded, {result.already_present} already there"
+    if result.failed:
+        ui.error(f"{summary}, {len(result.failed)} failed")
+    else:
+        ui.ok(f"{summary} -> {result.folder}")
+    _show_log(log)
+    if result.failed:
+        raise CliError(
+            f"{len(result.failed)} of {result.total} items couldn't be imported; "
+            "run the same command again to retry them."
         )
-    if unfetched:
-        problems.append(f"{unfetched} playlists have no setlist; run `spotarchive --fetch` first.")
-    if problems:
-        raise CliError(" ".join(problems))
-
-
-def _hand_over_youtube_login(store: SessionStore, backends: list[DownloadBackend]) -> str | None:
-    """Give *backends* the YouTube login; returns the warning to show when it has expired."""
-    if youtube_auth.is_logged_in(store.youtube):
-        for backend in backends:
-            backend.use_youtube_login(store.youtube)
-    elif store.youtube is not None:
-        return (
-            "The saved YouTube login has expired, so age-restricted songs may fail; "
-            "run `spotarchive -l youtube` to log in again."
-        )
-    return None
-
-
-def make_url_backend(settings: Config) -> DownloadBackend:
-    """The backend that downloads a link: a configured one if it can, else :data:`URL_BACKEND`."""
-    for name in (settings.backend, settings.fallback):
-        if name:
-            backend = _build_backend(settings, name)
-            if backend.can_download_url:
-                return backend
-    return _build_backend(settings, URL_BACKEND)
 
 
 def run_overwrite(store: SessionStore, data_dir: Path, settings: Config, song: str, url: str) -> None:
     """``--overwrite``: put what's at *url* in place of every copy of *song*."""
-    backend = make_url_backend(settings)
+    backend = make_importer(settings)
     # Look first: with nothing to replace there's nothing to download.
     found = override.find_copies(data_dir, song, backend.audio_extensions | TAGGABLE_EXTENSIONS)
     for note in found.notes:
@@ -444,29 +449,29 @@ def run_overwrite(store: SessionStore, data_dir: Path, settings: Config, song: s
             "or as the file is named."
         )
     backend.check()
-    for warning in backend.warnings():
-        ui.warn(warning)
-    expired = _hand_over_youtube_login(store, [backend])
-    if expired:
-        ui.warn(expired)
+    log = DownloadLog.for_run(data_dir)
+    _show_warnings([backend], log)
+    _hand_over_youtube_login(store, [backend], log)
 
     for copy in found.copies:
         for file in copy.files:
             ui.info(f"Found {copy.folder / file}")
-    ui.info(f"Downloading {url} with {backend.name}...")
     failed = 0
     # Hidden, so a leftover is never taken for a downloaded song.
     with tempfile.TemporaryDirectory(prefix=".override-", dir=data_dir) as staging:
         try:
-            files = backend.download_url(url, Path(staging), DownloadEvents())
+            with ui.working("Reading the link..."):
+                listing = backend.list_url(url)
+            if listing.playlist is not None:
+                raise CliError("The link must be a single video or track, not a playlist. Nothing was changed.")
+            ui.info(f"Downloading {url} with {backend.name}...")
+            source = backend.import_item(listing.items[0], Path(staging), DownloadEvents())[0]
         except DownloadFailed as exc:
             raise CliError(f"Couldn't download {url}: {exc}. Nothing was changed.") from exc
-        if len(files) != 1:
-            raise CliError(f"{url} gave {len(files)} files instead of one. Nothing was changed.")
         for copy in found.copies:
             try:
-                result = override.replace_copy(copy, files[0], url)
-            except OSError as exc:
+                result = override.replace_copy(copy, source, url)
+            except (OSError, DownloadFailed) as exc:
                 failed += 1
                 ui.error(f"Couldn't replace {copy.folder / copy.files[0]}: {exc}")
                 continue
@@ -478,8 +483,63 @@ def run_overwrite(store: SessionStore, data_dir: Path, settings: Config, song: s
             f"Not downloaded yet in {', '.join(found.missing)}, so nothing was replaced there. "
             "To use your link there too, run this again after downloading."
         )
+    _show_log(log)
     if failed:
         raise CliError(f"{failed} of {len(found.copies)} copies couldn't be replaced.")
+
+
+def run_download(store: SessionStore, data_dir: Path, settings: Config, threads: int | None = None) -> None:
+    """Download what's missing; *threads* (from --threads) overrides the configured number."""
+    folders = selected_folders(store, data_dir)
+    if not folders:
+        raise CliError("No playlists have been fetched yet; run `spotarchive --fetch` first.")
+    backend = make_backend(settings)
+    backend.check()
+    log = DownloadLog.for_run(data_dir)
+    fallback = _usable_fallback(settings, log)
+    # Every song is tried with these in turn.
+    backends = [backend] if fallback is None else [backend, fallback]
+    _show_warnings(backends, log)
+    _hand_over_youtube_login(store, backends, log)
+    threads = threads or settings.download_threads()
+
+    playlists, unfetched = [], 0
+    for name, folder in folders:
+        try:
+            playlists.append(prepare_playlist(backends, name, folder))
+        except FileNotFoundError as exc:
+            unfetched += 1
+            ui.error(f"{name}: {exc}")
+            log.error(str(exc), name)
+    pending = sum(len(p.pending) for p in playlists)
+
+    if fallback is not None and pending:
+        ui.info(f"Songs {backend.name} can't download are tried with {fallback.name}.")
+    _download(backends, playlists, threads, log)
+
+    failed_songs = 0
+    for result in playlists:
+        failed_songs += len(result.failed)
+        summary = f"{result.name}: {result.downloaded} downloaded, {result.already_present} already there"
+        if result.failed:
+            ui.error(f"{summary}, {len(result.failed)} failed")
+        else:
+            ui.ok(summary)
+    if playlists:
+        downloaded = sum(p.downloaded for p in playlists)
+        total = f"Total: {downloaded} downloaded, {failed_songs} failed"
+        (ui.error if failed_songs else ui.ok)(f"{total}, {sum(p.already_present for p in playlists)} already there.")
+    _show_log(log)
+
+    problems = []
+    if failed_songs:
+        problems.append(
+            f"{failed_songs} songs couldn't be downloaded; run `spotarchive --download` again to retry them."
+        )
+    if unfetched:
+        problems.append(f"{unfetched} playlists have no setlist; run `spotarchive --fetch` first.")
+    if problems:
+        raise CliError(" ".join(problems))
 
 
 def _plural(n: int, word: str) -> str:
@@ -702,12 +762,19 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
     if args.update and (args.login or args.fetch or args.download or args.meta or args.threads or args.overwrite):
         parser.error("--update can't be combined with other options")
     if args.overwrite:
-        if args.login or args.fetch or args.download or args.meta or args.threads is not None:
+        if args.login or args.fetch or args.download or args.meta or args.threads is not None or args.link:
             parser.error("--overwrite can only be combined with --config")
         args.overwrite = [value.strip() for value in args.overwrite]
         problem = override.check_arguments(*args.overwrite)
         if problem:
             parser.error(problem)
+    if args.link is not None:
+        if not args.download:
+            parser.error("a LINK only works with --download (spotarchive -d LINK)")
+        if args.login or args.fetch or args.meta:
+            parser.error(
+                "-d LINK can't be combined with --login, --fetch or --meta (imports are tagged as they download)"
+            )
     plain = not (args.login or args.fetch or args.download or args.meta or args.overwrite)
     if args.threads is not None and not (args.download or plain):
         parser.error("--threads only works when downloading (e.g. -d -t 4)")
@@ -724,18 +791,21 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
         if args.overwrite:
             run_overwrite(store, data_dir, settings, *args.overwrite)
             return 0
+        if args.link is not None:
+            run_import(store, data_dir, settings, args.link, args.threads)
+            return 0
         if args.login:
             run_login(store, args.login, settings.login_browser, args.cookies)
         if plain:
             ensure_login(store, settings.login_browser)
             offer_youtube_login(store, settings.login_browser)
-            run_fetch(store, data_dir, noselect=False)
+            run_fetch(store, data_dir, settings, noselect=False)
             # With nothing selected, fetching has already said so.
             if not selected_folders(store, data_dir):
                 return 0
             args.download = args.meta = True
         elif args.fetch:
-            run_fetch(store, data_dir, args.noselect)
+            run_fetch(store, data_dir, settings, args.noselect)
         download_error = None
         if args.download:
             try:
@@ -763,7 +833,8 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
     except RateLimited as exc:
         ui.error(rate_limit_message(exc))
         return 1
-    except (AuthError, BackendUnavailable, ConfigError, SessionError, SpotifyApiError, CliError) as exc:
+    except (AuthError, BackendUnavailable, ConfigError, ImportRefused, SessionError, SpotifyApiError,
+            CliError) as exc:
         ui.error(str(exc))
         return 1
     except requests.RequestException as exc:
