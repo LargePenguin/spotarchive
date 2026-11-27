@@ -6,12 +6,20 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import requests
 
-from spotarchive import __version__, config, ui, update
-from spotarchive.backends import IMPORT_BACKEND, BackendUnavailable, DownloadBackend, DownloadFailed, get_backend
+from spotarchive import __version__, config, override, ui, update
+from spotarchive.backends import (
+    IMPORT_BACKEND,
+    BackendUnavailable,
+    DownloadBackend,
+    DownloadEvents,
+    DownloadFailed,
+    get_backend,
+)
 from spotarchive.config import Config, ConfigError
 from spotarchive.download import (
     DownloadListener,
@@ -40,6 +48,7 @@ from spotarchive.spotify.auth import (
     interactive_login,
 )
 from spotarchive.spotify.client import QueryOutdated, RateLimited, SpotifyApiError, SpotifyClient
+from spotarchive.tags import TAGGABLE_EXTENSIONS
 from spotarchive.youtube import auth as youtube_auth
 
 # Profiles of the login browser windows, next to session.json.
@@ -94,6 +103,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-m", "--meta", action="store_true",
         help="fix the metadata (tags) of the downloaded songs (-dm: download, then fix)",
+    )
+    parser.add_argument(
+        "-o", "--overwrite", nargs=2, metavar=("SONG", "URL"),
+        help='fix a wrong match: download URL and use it for every copy of SONG ("Artist - Song") '
+             "in the data folder",
     )
     parser.add_argument(
         "-t", "--threads", type=_thread_count, metavar="N",
@@ -417,6 +431,63 @@ def run_import(store: SessionStore, data_dir: Path, settings: Config, link: str,
         )
 
 
+def run_overwrite(store: SessionStore, data_dir: Path, settings: Config, song: str, url: str) -> None:
+    """``--overwrite``: put what's at *url* in place of every copy of *song*."""
+    backend = make_importer(settings)
+    # Look first: with nothing to replace there's nothing to download.
+    found = override.find_copies(data_dir, song, backend.audio_extensions | TAGGABLE_EXTENSIONS)
+    for note in found.notes:
+        ui.warn(note)
+    if not found.copies:
+        if found.missing:
+            raise CliError(
+                f"{song!r} is in the setlist of {', '.join(found.missing)} but hasn't been downloaded, so "
+                "there's nothing to replace; run `spotarchive --download` first."
+            )
+        raise CliError(
+            f'No copy of {song!r} was found in {data_dir}. Give "Artist - Song" as in setlist.csv, '
+            "or as the file is named."
+        )
+    backend.check()
+    log = DownloadLog.for_run(data_dir)
+    _show_warnings([backend], log)
+    _hand_over_youtube_login(store, [backend], log)
+
+    for copy in found.copies:
+        for file in copy.files:
+            ui.info(f"Found {copy.folder / file}")
+    failed = 0
+    # Hidden, so a leftover is never taken for a downloaded song.
+    with tempfile.TemporaryDirectory(prefix=".override-", dir=data_dir) as staging:
+        try:
+            with ui.working("Reading the link..."):
+                listing = backend.list_url(url)
+            if listing.playlist is not None:
+                raise CliError("The link must be a single video or track, not a playlist. Nothing was changed.")
+            ui.info(f"Downloading {url} with {backend.name}...")
+            source = backend.import_item(listing.items[0], Path(staging), DownloadEvents())[0]
+        except DownloadFailed as exc:
+            raise CliError(f"Couldn't download {url}: {exc}. Nothing was changed.") from exc
+        for copy in found.copies:
+            try:
+                result = override.replace_copy(copy, source, url)
+            except (OSError, DownloadFailed) as exc:
+                failed += 1
+                ui.error(f"Couldn't replace {copy.folder / copy.files[0]}: {exc}")
+                continue
+            for warning in result.warnings:
+                ui.warn(warning)
+            ui.ok(f"Replaced {', '.join(copy.files)} with {result.file} in {copy.folder}")
+    if found.missing:
+        ui.warn(
+            f"Not downloaded yet in {', '.join(found.missing)}, so nothing was replaced there. "
+            "To use your link there too, run this again after downloading."
+        )
+    _show_log(log)
+    if failed:
+        raise CliError(f"{failed} of {len(found.copies)} copies couldn't be replaced.")
+
+
 def run_download(store: SessionStore, data_dir: Path, settings: Config, threads: int | None = None) -> None:
     """Download what's missing; *threads* (from --threads) overrides the configured number."""
     folders = selected_folders(store, data_dir)
@@ -688,8 +759,15 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
             parser.error("--cookies only works together with --login youtube")
     if args.noselect and not args.fetch:
         parser.error("--noselect only works together with --fetch (e.g. -fn)")
-    if args.update and (args.login or args.fetch or args.download or args.meta or args.threads):
+    if args.update and (args.login or args.fetch or args.download or args.meta or args.threads or args.overwrite):
         parser.error("--update can't be combined with other options")
+    if args.overwrite:
+        if args.login or args.fetch or args.download or args.meta or args.threads is not None or args.link:
+            parser.error("--overwrite can only be combined with --config")
+        args.overwrite = [value.strip() for value in args.overwrite]
+        problem = override.check_arguments(*args.overwrite)
+        if problem:
+            parser.error(problem)
     if args.link is not None:
         if not args.download:
             parser.error("a LINK only works with --download (spotarchive -d LINK)")
@@ -697,7 +775,7 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
             parser.error(
                 "-d LINK can't be combined with --login, --fetch or --meta (imports are tagged as they download)"
             )
-    plain = not (args.login or args.fetch or args.download or args.meta)
+    plain = not (args.login or args.fetch or args.download or args.meta or args.overwrite)
     if args.threads is not None and not (args.download or plain):
         parser.error("--threads only works when downloading (e.g. -d -t 4)")
 
@@ -710,6 +788,9 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
         settings = config.load(args.config)
         data_dir = settings.data_dir if data_dir is None else data_dir
         store = SessionStore.load(data_dir)
+        if args.overwrite:
+            run_overwrite(store, data_dir, settings, *args.overwrite)
+            return 0
         if args.link is not None:
             run_import(store, data_dir, settings, args.link, args.threads)
             return 0

@@ -106,6 +106,8 @@ Because backends name files after what *they* found, the file name alone can't a
 }
 ```
 
+A song you [replaced with your own link](#fixing-a-wrong-match) has an `"override"` entry with that link instead of a `"backend"`.
+
 It is updated after every song, so stopping a run with <kbd>Ctrl</kbd>+<kbd>C</kbd> loses nothing. It moves with the folder when a playlist is [renamed](fetching.md#folders). Deleting it is harmless: songs then fall back to the file name check, and anything that check misses is downloaded again.
 
 ## When a song fails
@@ -148,6 +150,42 @@ Importing doesn't use Spotify, so it needs no login or fetched playlists. A [You
 When [`import_dir`](configuration.md#import_dir) is inside the download folder, the folder directly in the download folder that is or holds it (`imports` by default; `music` for `import_dir = "music/links"`) is never used for a Spotify playlist's folder: a playlist named like that gets [its ID appended](fetching.md#folders). If a playlist already has that folder, from before imports or before you changed the setting, importing is refused until the next `spotarchive --fetch` has moved the playlist, with its files, out of it. If the playlist is no longer in your library, rename or move the folder yourself.
 
 An `import_dir` outside the download folder reserves no playlist folder name. In either case, a folder that holds a `setlist.csv` is never imported into.
+
+## Fixing a wrong match
+
+Backends search by name, so now and then one downloads the wrong track: a cover, a remix, a different song altogether. Find the right one yourself and give Spotarchive its link:
+
+```bash
+spotarchive --overwrite "Artist Name - Song Name" "https://www.youtube.com/watch?v=..."
+spotarchive -o "Artist Name - Song Name" "https://www.youtube.com/watch?v=..."    # the same
+```
+
+Put both in quotes (links often contain `&`). The audio at the link is downloaded once, and then replaces every copy of that song in the [download folder](configuration.md#data_dir). `--overwrite` needs no Spotify login and can only be combined with [`--config`](configuration.md).
+
+> [!WARNING]
+> The old files are deleted. This happens only after the download worked, and there is no confirmation question.
+
+### Which files are replaced
+
+Every folder in the download folder is searched, including playlists that aren't currently selected and [imports](#importing-a-link), with their subfolders, plus files lying directly in the download folder. An [`import_dir`](configuration.md#import_dir) outside the download folder isn't searched. Folders whose name starts with `.` are skipped. Case is ignored, and characters that aren't allowed in file names count as `_`. A copy is:
+
+- **The song in a setlist.** `"Artist Name - Song Name"` is compared with each `setlist.csv` row (the artist can be the first one or all of them, as for [skipping](#skipping-songs-you-already-have)). Its files come from the [download record](#the-downloadsjson-record), so they are found even when the backend named them after the wrong track it found. If different versions of a song in your playlists share that artist and title, they all get your link's audio.
+- **A file named like that**, with or without a setlist.
+
+You can also give the name of the *wrong file* (say `"Other Band - Other Song.mp3"` was downloaded for your song: use `"Other Band - Other Song"`). The record then tells which song it was downloaded for, and that song gets your link. But if some setlist does have a song called what you typed, you are taken to mean that song: files the record gives to *another* song are left alone, with a warning naming it.
+
+### What the new file looks like
+
+- It is named `Artist - Song` after the setlist row, in the folder the old file was in. A file that matched no setlist row keeps its name. If another song's file already has the name, ` (2)` is added, so nothing else is overwritten.
+- It gets the setlist's tags (title, artists, album, release date; each playlist's own). Without a setlist row, only the artist and title you typed replace the link's. Anything else comes from the link as for [imported links](metadata.md#imported-links), including cover art for official tracks. There are no lyrics.
+- The record entry notes your link as `"override"`. [Metadata cleanup](metadata.md#songs-you-replaced) then never asks a download helper about the song, which could bring back the wrong match's tags, and later downloads skip it as usual.
+
+### How the link is downloaded
+
+The link is downloaded as a [link import](#importing-a-link) of one item: [yt-dlp](backends.md#yt-dlp) gets exactly what the link points to, whichever backends you've configured. Nothing is searched for, and the [length check](configuration.md#backendsytdlp) doesn't apply. The audio format and other [`[backends.ytdlp]`](configuration.md#backendsytdlp) settings do, so the new file's type can differ from the old one's. A [YouTube login](authentication.md#logging-in-to-youtube-optional) is used if you have one. Any site yt-dlp supports works, except Spotify: Spotarchive never takes audio from there. The link must be a single video or track (a video link that also names a playlist means the video); playlists and live streams are refused. If the download fails, nothing is changed.
+
+> [!NOTE]
+> Only files that exist are replaced; the link isn't remembered for later downloads. If a playlist lists the song but doesn't have it yet, Spotarchive tells you; run `spotarchive -d` and then the same `--overwrite` again. The same goes for a playlist you add later. If you delete a replaced file, the next download searches for the song with the backend again.
 
 ## The log file
 

@@ -31,6 +31,7 @@ Archiver for Spotify and YouTube Music: cache your playlists' metadata, then leg
 - Smart downloading that skips songs you already have, several songs at once
 - Metadata cleanup, from the download helper or from Spotify's metadata
 - Manual imports: `spotarchive -d <link>` downloads a YouTube video or playlist (or any other link yt-dlp supports)
+- Wrong matches fixed with a link of your own (`--overwrite`)
 - A single configuration file (`spotarchive.toml`)
 - Linux and Windows support
 

@@ -12,6 +12,9 @@ The tags come from one of two sources (``metadata.source`` in the config):
   album, release date), written with mutagen. Files are only saved when a
   tag actually differs.
 
+Songs the user replaced with ``--overwrite`` already have the setlist's tags
+and are never handed to a helper.
+
 Which file belongs to which song comes from the download record, as for
 downloading. The record also remembers who tagged a song (``tagged``).
 """
@@ -100,7 +103,9 @@ def fix_playlist_metadata(
         entry = record[song.key]  # record_present added every present song
         try:
             if chain:
-                changed = tagged_by(entry, chain) not in names
+                # A helper looks songs up by name, so it could put back the
+                # metadata of the match the user replaced (--overwrite).
+                changed = not entry.get("override") and tagged_by(entry, chain) not in names
                 if changed:
                     tagger = _tag(song, folder, present[song.key], tagging_order(entry, chain))
             else:

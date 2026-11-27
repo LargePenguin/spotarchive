@@ -133,6 +133,9 @@ yt-dlp --ignore-config --extract-audio --audio-format mp3 --audio-quality 0 --no
 
 The file is [tagged](metadata.md#imported-links) from `download.info.json`, FFmpeg crops the thumbnail for the cover art, and the file is then moved into the folder under its final name. Everything else in the temporary folder is deleted. For a page whose items have no links of their own, `--playlist-items N` picks one.
 
+[`spotarchive --overwrite`](downloading.md#fixing-a-wrong-match) downloads your link the same way, as a single item, then replaces the file's name and its title, artist, album and date with the setlist's.
+
+
 ## Writing a new backend
 
 A backend is a subclass of `DownloadBackend` in [`src/spotarchive/backends/base.py`](../src/spotarchive/backends/base.py). Keep everything specific to your helper inside its own module in `src/spotarchive/backends/`.
