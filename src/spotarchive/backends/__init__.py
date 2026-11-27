@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable
 
 from spotarchive.backends.base import (
+    STAGING_PREFIX,
     BackendUnavailable,
     DownloadBackend,
     DownloadEvents,
@@ -24,6 +25,7 @@ BACKENDS: dict[str, Callable[..., DownloadBackend]] = {
 __all__ = [
     "BACKENDS",
     "DEFAULT_BACKEND",
+    "STAGING_PREFIX",
     "BackendUnavailable",
     "DownloadBackend",
     "DownloadEvents",

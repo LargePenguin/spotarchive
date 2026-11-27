@@ -12,6 +12,7 @@ import requests
 
 from spotarchive import __version__, config, ui, update
 from spotarchive.backends import BackendUnavailable, DownloadBackend, get_backend
+from spotarchive.cache import clear_stale
 from spotarchive.config import Config, ConfigError
 from spotarchive.download import (
     DownloadListener,
@@ -239,7 +240,12 @@ def ensure_login(store: SessionStore, browser: str = "") -> None:
         run_spotify_login(store, browser)
 
 
-def run_fetch(store: SessionStore, data_dir: Path, noselect: bool) -> None:
+def _reserved_folders(data_dir: Path, cache_dir: Path) -> set[str]:
+    """Folder names in *data_dir* that no playlist may get."""
+    return {cache_dir.name} if cache_dir.resolve().parent == data_dir.resolve() else set()
+
+
+def run_fetch(store: SessionStore, data_dir: Path, noselect: bool, reserved: set[str] = frozenset()) -> None:
     client = make_client(store)
     with ui.working("Loading your playlists..."):
         playlists = client.playlists()
@@ -270,7 +276,7 @@ def run_fetch(store: SessionStore, data_dir: Path, noselect: bool) -> None:
                 bar.update(task, completed=done, total=total)
             return update
 
-        results = fetch_setlists(client, store, data_dir, chosen, progress_for)
+        results = fetch_setlists(client, store, data_dir, chosen, progress_for, reserved)
 
     failed = 0
     for result in results:
@@ -316,17 +322,38 @@ def _usable_fallback(settings: Config, log: DownloadLog | None = None) -> Downlo
         return None
 
 
+def _clear_cache(cache_dir: Path, log: DownloadLog) -> Path:
+    """Delete what earlier downloads left in the cache; returns its absolute path."""
+    # Absolute: programs run from inside it, and path lengths are compared.
+    cache_dir = cache_dir.absolute()
+    try:
+        removed, failed = clear_stale(cache_dir)
+    except OSError as exc:
+        raise CliError(f"Can't use the download cache folder {cache_dir}: {exc}") from exc
+    if removed:
+        ui.info(f"Removed {_plural(removed, 'stale download folder')} from the cache.")
+    for path, reason in failed:
+        message = f"Couldn't delete the stale download folder {path}: {reason}"
+        ui.warn(message)
+        log.warning(message)
+    return cache_dir
+
+
 def run_download(store: SessionStore, data_dir: Path, settings: Config, threads: int | None = None) -> None:
     """Download what's missing; *threads* (from --threads) overrides the configured number."""
     folders = selected_folders(store, data_dir)
     if not folders:
         raise CliError("No playlists have been fetched yet; run `spotarchive --fetch` first.")
+    log = DownloadLog.for_run(data_dir)
+    # Before anything else a download does.
+    cache_dir = _clear_cache(settings.cache_path(data_dir), log)
     backend = make_backend(settings)
     backend.check()
-    log = DownloadLog.for_run(data_dir)
     fallback = _usable_fallback(settings, log)
     # Every song is tried with these in turn.
     backends = [backend] if fallback is None else [backend, fallback]
+    for b in backends:
+        b.cache_dir = cache_dir
     shown = set()
     for warning in (w for b in backends for w in b.warnings()):
         # Both run yt-dlp, so they may warn the same.
@@ -627,18 +654,19 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
         settings = config.load(args.config)
         data_dir = settings.data_dir if data_dir is None else data_dir
         store = SessionStore.load(data_dir)
+        reserved = _reserved_folders(data_dir, settings.cache_path(data_dir))
         if args.login:
             run_login(store, args.login, settings.login_browser, args.cookies)
         if plain:
             ensure_login(store, settings.login_browser)
             offer_youtube_login(store, settings.login_browser)
-            run_fetch(store, data_dir, noselect=False)
+            run_fetch(store, data_dir, False, reserved)
             # With nothing selected, fetching has already said so.
             if not selected_folders(store, data_dir):
                 return 0
             args.download = args.meta = True
         elif args.fetch:
-            run_fetch(store, data_dir, args.noselect)
+            run_fetch(store, data_dir, args.noselect, reserved)
         download_error = None
         if args.download:
             try:

@@ -1,7 +1,7 @@
 """SomeDL (https://github.com/ChemistryGull/SomeDL), the default backend.
 
 SomeDL is run as a separate program, once per song, from a temporary folder
-inside the playlist folder (so songs downloading at once don't mix up their
+in the download cache (so songs downloading at once don't mix up their
 files). Its output is parsed for progress, warnings and errors, and passed on
 to the terminal when downloading one song at a time. It searches YouTube
 Music for "Artist - Song" and tags the file with metadata it collects itself.
@@ -40,6 +40,7 @@ from spotarchive.backends.util import (
     forward,
     has_deno,
     is_terminal,
+    place,
     safe_name,
 )
 
@@ -51,11 +52,6 @@ INSTALL_HINT = (
 _SUBCOMMANDS = {"import", "new-template", "update-metadata", "download", "sync", "web"}
 # `somedl import` lists the files it handled in this file, one path per line.
 _IMPORT_CACHE = "somedl_import_cache"
-# Per-song download folder inside the playlist folder (hidden: the dot keeps
-# it out of the "already there" check). Kept short: SomeDL and yt-dlp write
-# long file names (and `.part` files) into it, and Windows allows only 260
-# characters for the whole path.
-STAGING_PREFIX = ".sd-"
 # What yt-dlp reports when the file it wants to write doesn't fit the path limit
 # (on Windows an overlong path reads as "No such file or directory").
 _PATH_TOO_LONG = re.compile(
@@ -146,22 +142,23 @@ class SomeDLBackend(DownloadBackend):
     def download(self, song: Song, folder: Path, events: DownloadEvents | None = None) -> list[Path]:
         events = events or DownloadEvents()
         try:
-            return self._download_in(song, folder, folder, events)
+            return self._download_in(song, folder, None, events)
         except _PathTooLong as exc:
-            # The song's own file name is too long for the playlist folder's
+            # The song's own file name is too long for the cache folder's
             # path. Try again in the shortest folder there is: the system's
             # temporary one; the file name is shortened when it's moved back.
             short = Path(tempfile.gettempdir())
-            if len(str(short)) >= len(str(folder)):
-                raise DownloadFailed(f"{exc} (path too long: {folder})") from exc
-            events.warning(f"The path was too long to download into {folder}; trying again in a shorter folder.")
+            used = self.cache_dir or folder
+            if len(str(short)) >= len(str(used)):
+                raise DownloadFailed(f"{exc} (path too long: {used})") from exc
+            events.warning(f"The path was too long to download into {used}; trying again in a shorter folder.")
             return self._download_in(song, folder, short, events)
 
-    def _download_in(self, song: Song, folder: Path, where: Path, events: DownloadEvents) -> list[Path]:
-        """Download *song* into a new hidden folder inside *where*, then move the files to *folder*."""
+    def _download_in(self, song: Song, folder: Path, where: Path | None, events: DownloadEvents) -> list[Path]:
+        """Download *song* into a new staging folder (in *where* if given), then move the files to *folder*."""
         # Each song downloads into its own hidden folder, so the new files are
         # simply what's in it, even with other songs downloading next to it.
-        staging = Path(tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=where))
+        staging = self.make_staging(folder, where)
         try:
             # Its own cookie file too, so parallel downloads don't share one.
             with cookie_file(self.youtube_login) as cookies:
@@ -271,18 +268,6 @@ def fit_name(folder: Path, name: str) -> str:
     return f"{stem.rstrip(' .')}{suffix}"
 
 
-def _place(source: Path, target: Path) -> None:
-    """Move *source* over *target*, also across file systems."""
-    try:
-        # Like SomeDL itself with --skip-file-check: replace what's there.
-        os.replace(source, target)
-    except OSError:
-        if source.parent.stat().st_dev == target.parent.stat().st_dev:
-            raise
-        shutil.copy2(source, target)
-        source.unlink()
-
-
 def _move_into(staging: Path, folder: Path, audio: list[Path], events: DownloadEvents | None = None) -> list[Path]:
     """Move everything SomeDL wrote (subfolders included) into *folder*; return the audio files' new paths.
 
@@ -300,7 +285,8 @@ def _move_into(staging: Path, folder: Path, audio: list[Path], events: DownloadE
         target = directory / name
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            _place(p, target)
+            # Like SomeDL itself with --skip-file-check: replace what's there.
+            place(p, target)
         except OSError as exc:
             raise DownloadFailed(f"couldn't move {target.name} into the playlist folder: {exc}") from exc
         if p in audio:

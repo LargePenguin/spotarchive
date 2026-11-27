@@ -42,6 +42,7 @@ Folder names are the playlist names, adjusted to be valid on both Linux and Wind
 - Trailing dots and spaces are removed, and names are capped at 100 characters.
 - Names Windows reserves (`CON`, `NUL`, `COM1`, ...) get a leading `_`.
 - Two playlists whose names would clash (ignoring case) are told apart by appending the playlist ID, e.g. `Chill (abc123)`. A playlist that already had the plain name keeps it.
+- The [download cache](downloading.md#the-download-cache) folder's name (`cache`) is taken too when the cache is in the download folder, so a playlist with that name also gets its ID appended.
 
 When you rename a playlist on Spotify, its folder is renamed on the next fetch, together with anything already downloaded into it.
 

@@ -7,12 +7,19 @@ loop, the setlists or the CLI. See ``docs/backends.md``.
 
 from __future__ import annotations
 
+import tempfile
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
 from spotarchive.session import YouTubeSession
 from spotarchive.setlist import ARTIST_SEPARATOR
+
+
+# How every staging folder's name starts: what clearing the download cache
+# deletes. Short, because Windows limits the length of a whole path, and with a
+# dot so the "already there" check skips it.
+STAGING_PREFIX = ".sa-"
 
 
 class BackendUnavailable(Exception):
@@ -112,6 +119,24 @@ class DownloadBackend(ABC):
     tags_downloads: bool = False
     # The YouTube login handed over by :meth:`use_youtube_login`, if any.
     youtube_login: YouTubeSession | None = None
+
+    # Where to download to before moving the files into the playlist folder;
+    # None = inside the playlist folder. Set before downloading.
+    cache_dir: Path | None = None
+
+    def make_staging(self, folder: Path, parent: Path | None = None) -> Path:
+        """A new, empty folder to download one song headed for *folder* into.
+
+        It's in :attr:`cache_dir` (or *parent*, when given). Remove it when
+        the song is done; if the run is killed first, the next download
+        clears it from the cache.
+        """
+        parent = parent or self.cache_dir or folder
+        try:
+            parent.mkdir(parents=True, exist_ok=True)
+            return Path(tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=parent))
+        except OSError as exc:
+            raise DownloadFailed(f"couldn't create a download folder in {parent}: {exc}") from exc
 
     def use_youtube_login(self, login: YouTubeSession) -> None:
         """Called before downloading when the user is logged in to YouTube.

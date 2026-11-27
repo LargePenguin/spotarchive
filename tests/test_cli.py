@@ -697,3 +697,44 @@ def test_download_with_expired_youtube_login_warns(logged_in, fake_client, fake_
     assert cli.main(["-d"], data_dir=logged_in) == 0
     assert fake_backend.youtube_login is None
     assert "-l youtube" in " ".join(capsys.readouterr().out.split())
+
+
+def test_download_clears_the_cache_before_anything_else(logged_in, fake_client, fake_backend, monkeypatch, capsys):
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    stale = logged_in / "cache" / ".sa-stale"
+    stale.mkdir(parents=True)
+    (stale / "half.mp3.part").write_bytes(b"x")
+    seen = []
+    monkeypatch.setattr(fake_backend, "check", lambda: seen.append(stale.exists()))
+
+    assert cli.main(["-d"], data_dir=logged_in) == 0
+    assert seen == [False]
+    assert fake_backend.cache_dir == (logged_in / "cache").absolute()
+    assert "Removed 1 stale download folder from the cache." in capsys.readouterr().out
+
+
+def test_download_uses_the_configured_cache_dir(logged_in, fake_client, fake_backend, monkeypatch, tmp_path_factory):
+    cache = tmp_path_factory.mktemp("elsewhere")
+    (cache / ".sa-stale").mkdir()
+    path = tmp_path_factory.mktemp("cfg") / "spotarchive.toml"
+    path.write_text(f'cache_dir = "{cache.as_posix()}"\n', encoding="utf-8")
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    assert cli.main(["-d", "-c", str(path)], data_dir=logged_in) == 0
+    assert fake_backend.cache_dir == cache
+    assert list(cache.iterdir()) == []
+
+
+def test_unusable_cache_dir_is_reported(logged_in, fake_client, fake_backend, monkeypatch, capsys):
+    choose(monkeypatch, ["p1"])
+    cli.main(["-f"], data_dir=logged_in)
+    (logged_in / "cache").write_bytes(b"not a folder")
+    assert cli.main(["-d"], data_dir=logged_in) == 1
+    assert "download cache folder" in capsys.readouterr().out
+    assert fake_backend.requested == []
+
+
+def test_only_a_cache_inside_data_dir_reserves_its_name(tmp_path):
+    assert cli._reserved_folders(tmp_path, tmp_path / "cache") == {"cache"}
+    assert cli._reserved_folders(tmp_path, tmp_path / "other" / "cache") == set()

@@ -35,6 +35,7 @@ def test_example_file_matches_the_defaults():
     assert (settings.data_dir, settings.backend, settings.metadata_source, settings.threads) == (
         Config.data_dir, Config.backend, Config.metadata_source, Config.threads)
     assert settings.fallback == Config.fallback
+    assert settings.cache_dir == Config.cache_dir
     backend = get_backend(settings.backend, **settings.options_for(settings.backend))
     default = SomeDLBackend()
     assert vars(backend) == vars(default)
@@ -45,6 +46,7 @@ def test_example_file_matches_the_defaults():
 def test_reads_every_setting(tmp_path):
     settings = config.load(write(tmp_path, """
 data_dir = "~/music"
+cache_dir = "~/music-cache"
 [download]
 backend = "somedl"
 [metadata]
@@ -56,6 +58,8 @@ flat = false
 extra_args = ["--sleep", "5"]
 """))
     assert settings.data_dir == Path("~/music").expanduser()
+    assert settings.cache_dir == Path("~/music-cache").expanduser()
+    assert settings.cache_path(settings.data_dir) == settings.cache_dir
     assert settings.metadata_source == "setlist"
     assert settings.options_for("somedl") == {"audio_format": "opus", "flat": False, "extra_args": ["--sleep", "5"]}
     assert settings.options_for("other") == {}
@@ -65,6 +69,7 @@ extra_args = ["--sleep", "5"]
     ("data_dir = [", "Can't read"),
     ("dta_dir = 'x'", "unknown setting 'dta_dir'"),
     ("data_dir = ''", "data_dir must be a non-empty string"),
+    ("cache_dir = 1", "cache_dir must be a string"),
     ("[metadata]\nsource = 'spotify'", "metadata.source must be one of"),
     ("[metadata]\nsorce = 'setlist'", "unknown setting 'sorce' in metadata"),
     ("download = 'somedl'", "download must be a table"),
@@ -118,3 +123,10 @@ def test_fallback(tmp_path):
     assert (settings.backend, settings.fallback) == ("ytdlp", "somedl")
     # Only the backend set to the default fallback: no fallback, not an error.
     assert config.load(write(tmp_path, "[download]\nbackend = 'ytdlp'")).fallback == ""
+
+
+@pytest.mark.parametrize("text", ["", "cache_dir = ''", "cache_dir = '  '"])
+def test_cache_dir_defaults_to_a_folder_in_data_dir(tmp_path, text):
+    settings = config.load(write(tmp_path, text))
+    assert settings.cache_dir is None
+    assert settings.cache_path(tmp_path / "music") == tmp_path / "music" / "cache"

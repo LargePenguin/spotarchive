@@ -239,3 +239,14 @@ def test_warns_without_deno(monkeypatch):
     assert "Deno" in backend().warnings()[0]
     monkeypatch.setattr(ytdlp.shutil, "which", lambda name, path=None: "/usr/bin/deno")
     assert backend().warnings() == []
+
+
+def test_downloads_in_the_cache_folder(tmp_path, run):
+    cache, folder = tmp_path / "cache", tmp_path / "Playlist"
+    folder.mkdir()
+    helper = backend()
+    helper.cache_dir = cache
+    assert helper.download(SONG, folder) == [folder / "Fake Artist - Song A.mp3"]
+    command = run.calls[0]["cmd"]
+    assert Path(command[command.index("--paths") + 1]).parent == cache
+    assert list(cache.iterdir()) == []

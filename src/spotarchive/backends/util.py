@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import codecs
+import errno
 import os
 import re
 import shutil
@@ -12,7 +13,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from spotarchive.backends.base import DownloadFailed
+from spotarchive.backends.base import STAGING_PREFIX, DownloadFailed
 from spotarchive.session import YouTubeSession
 
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -61,6 +62,29 @@ def cookie_file(login: YouTubeSession | None) -> Iterator[Path | None]:
         path.unlink(missing_ok=True)
 
 
+def place(source: Path, target: Path) -> None:
+    """Move *source* over *target*, also from another drive.
+
+    Across drives the file is first copied next to *target* under a temporary
+    name, so an interrupted copy never looks like a downloaded song.
+    """
+    try:
+        os.replace(source, target)
+        return
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+    fd, name = tempfile.mkstemp(dir=target.parent, prefix=STAGING_PREFIX, suffix=".part")
+    os.close(fd)
+    partial = Path(name)
+    try:
+        shutil.copy2(source, partial)
+        os.replace(partial, target)
+    finally:
+        partial.unlink(missing_ok=True)
+    source.unlink()
+
+
 def move_into(staging: Path, folder: Path, audio: list[Path], everything: bool = True) -> list[Path]:
     """Move what a program wrote into *staging* over to *folder*; return the audio files' new paths.
 
@@ -74,7 +98,7 @@ def move_into(staging: Path, folder: Path, audio: list[Path], everything: bool =
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             # The caller already decided this song is missing: replace what's there.
-            os.replace(p, target)
+            place(p, target)
         except OSError as exc:
             raise DownloadFailed(f"couldn't move {target.name} into the playlist folder: {exc}") from exc
         if p in audio:

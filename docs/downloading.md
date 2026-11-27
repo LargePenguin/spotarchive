@@ -105,6 +105,25 @@ Because backends name files after what *they* found, the file name alone can't a
 
 It is updated after every song, so stopping a run with <kbd>Ctrl</kbd>+<kbd>C</kbd> loses nothing. It moves with the folder when a playlist is [renamed](fetching.md#folders). Deleting it is harmless: songs then fall back to the file name check, and anything that check misses is downloaded again.
 
+## The download cache
+
+Every song is downloaded into a temporary folder of its own (named `.sa-*`) in the download cache, and only the finished files move into the playlist folder. The cache is the `cache` folder in the download folder, unless [`cache_dir`](configuration.md#cache_dir) says otherwise; keep it on the same drive.
+
+A song's temporary folder is deleted once the song is done, whether it worked or not. A run that is killed or crashes (or a computer that loses power) can leave some behind, so **the first thing every download does is delete the leftover `.sa-*` folders in the cache**, so they don't pile up on your drive:
+
+```text
+:: Removed 2 stale download folders from the cache.
+```
+
+Nothing else in the cache folder is touched, so other files are safe even if `cache_dir` points at a folder you also use for something else.
+
+> [!WARNING]
+> Don't run two downloads with the same cache folder at the same time: the second one deletes the first one's unfinished songs.
+
+Earlier versions created these temporary folders (`.sd-*` and `.ytdlp-download-*`) inside the playlist folders. If an interrupted run left any there, they're safe to delete by hand.
+
+A playlist named like the cache folder (`cache`) gets the playlist ID appended to its [folder name](fetching.md#folders).
+
 ## When a song fails
 
 A song can fail when the backend can't find it or its download breaks. With a [fallback backend](backends.md#fallback-backend) it is first tried again with that one (with one thread you see a `! ... somedl couldn't download it (...); trying ytdlp` line), and only fails if the fallback can't download it either. Failures are shown as they happen, the other songs carry on, and the run ends with an error that counts them:

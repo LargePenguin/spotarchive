@@ -448,3 +448,13 @@ def test_tag_fails_when_somedl_didnt_handle_the_file(tmp_path, monkeypatch, fake
     with pytest.raises(TaggingFailed, match="Could not identify song"):
         backend().tag(SONG, file)
     assert [p.name for p in tmp_path.iterdir()] == ["song.mp3"]
+
+
+def test_downloads_in_the_cache_folder(tmp_path, run):
+    cache, folder = tmp_path / "cache", tmp_path / "Playlist"
+    folder.mkdir()
+    helper = backend()
+    helper.cache_dir = cache
+    assert helper.download(SONG, folder, Events()) == [folder / "Fake Artist - Song A.mp3"]
+    assert run.calls[0]["cwd"].parent == cache
+    assert list(cache.iterdir()) == []

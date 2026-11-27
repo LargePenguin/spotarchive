@@ -6,6 +6,7 @@ Spotarchive reads its settings from `spotarchive.toml`, a [TOML](https://toml.io
 
 ```toml
 data_dir = "data"
+cache_dir = ""
 
 [download]
 backend = "somedl"
@@ -44,6 +45,19 @@ data_dir = "~/Music/spotarchive"
 ```
 
 Moving `data_dir` doesn't move existing files: move the old folder's contents yourself, or you'll have to log in and fetch again.
+
+### `cache_dir`
+
+The download cache: every song is [downloaded into a temporary folder here](downloading.md#the-download-cache), then moved into its playlist folder. A relative path is relative to the folder you run `spotarchive` in; `~` stands for your home folder. Default (or `""`): the `cache` folder inside [`data_dir`](#data_dir), that is `<data_dir>/cache` on Linux and `<data_dir>\cache` on Windows.
+
+```toml
+cache_dir = "~/.cache/spotarchive"
+```
+
+> [!WARNING]
+> Keep the cache on the same drive as `data_dir`. On the same drive a finished song is just moved into place; from another drive it has to be copied across, which degrades performance.
+
+On Windows, write the path with forward slashes or in single quotes (`'D:\Music\cache'`): in a double-quoted TOML string a backslash starts an escape sequence.
 
 ### `[login]`
 

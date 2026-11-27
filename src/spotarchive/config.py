@@ -20,10 +20,12 @@ else:
     import tomli as tomllib
 
 CONFIG_FILENAME = "spotarchive.toml"
+# The download cache's folder inside data_dir, unless cache_dir says otherwise.
+CACHE_DIRNAME = "cache"
 # Where the metadata cleanup takes the tags from.
 METADATA_SOURCES = ("backend", "setlist")
 
-_TOP_LEVEL = {"data_dir", "login", "download", "metadata", "backends"}
+_TOP_LEVEL = {"data_dir", "cache_dir", "login", "download", "metadata", "backends"}
 
 
 class ConfigError(Exception):
@@ -36,6 +38,9 @@ class Config:
     path: Path | None = None
     # Relative paths are relative to the current directory.
     data_dir: Path = DEFAULT_DATA_DIR
+    # Where songs are downloaded before they move into their playlist folder;
+    # None = CACHE_DIRNAME inside data_dir. Relative like data_dir.
+    cache_dir: Path | None = None
     # Browser for the login window; "" = first of Chrome, Edge, bundled Chromium.
     login_browser: str = ""
     backend: str = "somedl"
@@ -49,6 +54,10 @@ class Config:
 
     def download_threads(self) -> int:
         return self.threads or default_threads()
+
+    def cache_path(self, data_dir: Path) -> Path:
+        """The download cache folder, for the data folder in use."""
+        return self.cache_dir or data_dir / CACHE_DIRNAME
 
     def options_for(self, backend: str) -> dict:
         # An empty string means "use the backend's default".
@@ -102,6 +111,12 @@ def parse(raw: dict, path: Path) -> Config:
     config = Config(path=path)
     if "data_dir" in raw:
         config.data_dir = Path(text(raw["data_dir"], "data_dir")).expanduser()
+    if "cache_dir" in raw:
+        if not isinstance(raw["cache_dir"], str):
+            raise fail("cache_dir must be a string (empty: the cache folder in data_dir)")
+        cache_dir = raw["cache_dir"].strip()
+        if cache_dir:
+            config.cache_dir = Path(cache_dir).expanduser()
     login = table(raw.get("login", {}), "login", {"browser"})
     if "browser" in login:
         if not isinstance(login["browser"], str):

@@ -2,8 +2,8 @@
 
 Meant as the fallback for SomeDL, which only searches YouTube Music and gives
 up on songs it finds no metadata for. yt-dlp is run once per song with a
-``ytsearchN:Artist - Song`` query, from a temporary folder inside the
-playlist folder (like SomeDL, so songs downloading at once don't mix up their
+``ytsearchN:Artist - Song`` query, from a temporary folder in the download
+cache (like SomeDL, so songs downloading at once don't mix up their
 files). Of the first *search_results* videos, the first one whose length is
 close to the song's length on Spotify is downloaded and converted to audio.
 
@@ -23,7 +23,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 from spotarchive.backends.base import (
@@ -49,9 +48,6 @@ from spotarchive.tags import write_setlist_tags
 INSTALL_HINT = 'Install it with `pip install "yt-dlp[default,deno]"`. See docs/backends.md#yt-dlp.'
 # What yt-dlp's --audio-format takes.
 AUDIO_FORMATS = ("best", "aac", "alac", "flac", "m4a", "mp3", "opus", "vorbis", "wav")
-# Per-song download folder inside the playlist folder (hidden: the dot keeps
-# it out of the "already there" check).
-STAGING_PREFIX = ".ytdlp-download-"
 # yt-dlp's exit code when it stopped because --max-downloads was reached.
 _MAX_DOWNLOADS_REACHED = 101
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
@@ -144,7 +140,7 @@ class YtDlpBackend(DownloadBackend):
 
     def download(self, song: Song, folder: Path, events: DownloadEvents | None = None) -> list[Path]:
         events = events or DownloadEvents()
-        staging = Path(tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=folder))
+        staging = self.make_staging(folder)
         try:
             with cookie_file(self.youtube_login) as cookies:
                 try:

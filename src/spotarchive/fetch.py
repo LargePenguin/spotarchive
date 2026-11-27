@@ -46,8 +46,11 @@ def fetch_setlists(
     data_dir: Path,
     playlists: list[Playlist],
     progress_for: Callable[[Playlist], ProgressCallback | None] = lambda p: None,
+    reserved: set[str] = frozenset(),
 ) -> list[FetchResult]:
     """Write a ``setlist.csv`` for each playlist in *playlists*.
+
+    No playlist gets a folder named like one in *reserved*.
 
     A failure on one playlist is reported in its result and doesn't stop
     the others. The session is saved after each playlist so folder moves are
@@ -58,7 +61,7 @@ def fetch_setlists(
         {p.id: p.name for p in playlists},
         {pid: state.folder for pid, state in store.playlists.items()},
         # Folders of playlists not being fetched now still hold their files.
-        reserved={s.folder for pid, s in store.playlists.items() if s.folder and pid not in fetching},
+        reserved=set(reserved) | {s.folder for pid, s in store.playlists.items() if s.folder and pid not in fetching},
     )
     results = []
     for playlist in playlists:

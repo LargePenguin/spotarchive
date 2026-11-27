@@ -9,6 +9,14 @@
 # is relative to the folder you run spotarchive in.
 data_dir = "data"
 
+# Folder songs are downloaded into before they move to their playlist folder.
+# A relative path is relative to the folder you run spotarchive in. Empty: the
+# "cache" folder inside data_dir. Leftovers of interrupted downloads are
+# deleted from it before every download.
+# WARNING: keep it on the same drive as data_dir. On another drive every song
+# has to be copied across instead of just moved, which degrades performance.
+cache_dir = ""
+
 [login]
 # Browser for the Spotify login window: "chrome", "edge", "brave", "vivaldi",
 # "opera" or "chromium". Empty: the first of Chrome, Edge and Playwright's
