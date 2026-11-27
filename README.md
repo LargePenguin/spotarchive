@@ -30,6 +30,7 @@ Archiver for Spotify and YouTube Music: cache your playlists' metadata, then leg
 - Pluggable download backends (default: [SomeDL](https://github.com/ChemistryGull/SomeDL), with [yt-dlp](https://github.com/yt-dlp/yt-dlp) as the fallback)
 - Smart downloading that skips songs you already have, several songs at once
 - Metadata cleanup, from the download helper or from Spotify's metadata
+- Wrong matches fixed with a link of your own (`--overwrite`)
 - A single configuration file (`spotarchive.toml`)
 - Linux and Windows support
 

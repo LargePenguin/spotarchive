@@ -40,6 +40,10 @@ If the configured backends can't tag files at all, Spotarchive says so and uses 
 
 Writes the tags with [mutagen](https://mutagen.readthedocs.io/), which handles MP3, M4A, FLAC, Ogg Vorbis and Opus. A file is only rewritten when one of its tags differs from the setlist, so running it again is quick and changes nothing. Multiple artists are stored as separate values of the artist tag. Empty setlist fields (Liked Songs have no album date, for example) are skipped rather than erased.
 
+## Songs you replaced
+
+Songs [replaced with your own link](downloading.md#fixing-a-wrong-match) (`spotarchive --overwrite`) get the setlist's tags right away. With the `backend` source they are never handed to a helper afterwards, since a helper searches by name and could write the wrong match's tags again. The `setlist` source treats them like any other song.
+
 ## What gets recorded
 
 Which source last tagged a song is kept in the playlist's [download record](downloading.md#the-downloadsjson-record) as `"tagged"` (`"somedl"`, `"ytdlp"`, `"setlist"`, ...). This lets the `backend` source skip songs one of the configured backends has tagged before, and retag songs the `setlist` source changed if you switch back. Deleting the record is harmless: with `backend`, recognized files are simply tagged again.

@@ -6,12 +6,20 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import requests
 
-from spotarchive import __version__, config, ui, update
-from spotarchive.backends import BackendUnavailable, DownloadBackend, get_backend
+from spotarchive import __version__, config, override, ui, update
+from spotarchive.backends import (
+    URL_BACKEND,
+    BackendUnavailable,
+    DownloadBackend,
+    DownloadEvents,
+    DownloadFailed,
+    get_backend,
+)
 from spotarchive.config import Config, ConfigError
 from spotarchive.download import (
     DownloadListener,
@@ -31,6 +39,7 @@ from spotarchive.spotify.auth import (
     interactive_login,
 )
 from spotarchive.spotify.client import QueryOutdated, RateLimited, SpotifyApiError, SpotifyClient
+from spotarchive.tags import TAGGABLE_EXTENSIONS
 from spotarchive.youtube import auth as youtube_auth
 
 # Profiles of the login browser windows, next to session.json.
@@ -79,6 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-m", "--meta", action="store_true",
         help="fix the metadata (tags) of the downloaded songs (-dm: download, then fix)",
+    )
+    parser.add_argument(
+        "-o", "--overwrite", nargs=2, metavar=("SONG", "URL"),
+        help='fix a wrong match: download URL and use it for every copy of SONG ("Artist - Song") '
+             "in the data folder",
     )
     parser.add_argument(
         "-t", "--threads", type=_thread_count, metavar="N",
@@ -334,14 +348,8 @@ def run_download(store: SessionStore, data_dir: Path, settings: Config, threads:
             shown.add(warning)
             ui.warn(warning)
             log.warning(warning)
-    if youtube_auth.is_logged_in(store.youtube):
-        for b in backends:
-            b.use_youtube_login(store.youtube)
-    elif store.youtube is not None:
-        expired = (
-            "The saved YouTube login has expired, so age-restricted songs may fail; "
-            "run `spotarchive -l youtube` to log in again."
-        )
+    expired = _hand_over_youtube_login(store, backends)
+    if expired:
         ui.warn(expired)
         log.warning(expired)
     threads = threads or settings.download_threads()
@@ -393,6 +401,85 @@ def run_download(store: SessionStore, data_dir: Path, settings: Config, threads:
         problems.append(f"{unfetched} playlists have no setlist; run `spotarchive --fetch` first.")
     if problems:
         raise CliError(" ".join(problems))
+
+
+def _hand_over_youtube_login(store: SessionStore, backends: list[DownloadBackend]) -> str | None:
+    """Give *backends* the YouTube login; returns the warning to show when it has expired."""
+    if youtube_auth.is_logged_in(store.youtube):
+        for backend in backends:
+            backend.use_youtube_login(store.youtube)
+    elif store.youtube is not None:
+        return (
+            "The saved YouTube login has expired, so age-restricted songs may fail; "
+            "run `spotarchive -l youtube` to log in again."
+        )
+    return None
+
+
+def make_url_backend(settings: Config) -> DownloadBackend:
+    """The backend that downloads a link: a configured one if it can, else :data:`URL_BACKEND`."""
+    for name in (settings.backend, settings.fallback):
+        if name:
+            backend = _build_backend(settings, name)
+            if backend.can_download_url:
+                return backend
+    return _build_backend(settings, URL_BACKEND)
+
+
+def run_overwrite(store: SessionStore, data_dir: Path, settings: Config, song: str, url: str) -> None:
+    """``--overwrite``: put what's at *url* in place of every copy of *song*."""
+    backend = make_url_backend(settings)
+    # Look first: with nothing to replace there's nothing to download.
+    found = override.find_copies(data_dir, song, backend.audio_extensions | TAGGABLE_EXTENSIONS)
+    for note in found.notes:
+        ui.warn(note)
+    if not found.copies:
+        if found.missing:
+            raise CliError(
+                f"{song!r} is in the setlist of {', '.join(found.missing)} but hasn't been downloaded, so "
+                "there's nothing to replace; run `spotarchive --download` first."
+            )
+        raise CliError(
+            f'No copy of {song!r} was found in {data_dir}. Give "Artist - Song" as in setlist.csv, '
+            "or as the file is named."
+        )
+    backend.check()
+    for warning in backend.warnings():
+        ui.warn(warning)
+    expired = _hand_over_youtube_login(store, [backend])
+    if expired:
+        ui.warn(expired)
+
+    for copy in found.copies:
+        for file in copy.files:
+            ui.info(f"Found {copy.folder / file}")
+    ui.info(f"Downloading {url} with {backend.name}...")
+    failed = 0
+    # Hidden, so a leftover is never taken for a downloaded song.
+    with tempfile.TemporaryDirectory(prefix=".override-", dir=data_dir) as staging:
+        try:
+            files = backend.download_url(url, Path(staging), DownloadEvents())
+        except DownloadFailed as exc:
+            raise CliError(f"Couldn't download {url}: {exc}. Nothing was changed.") from exc
+        if len(files) != 1:
+            raise CliError(f"{url} gave {len(files)} files instead of one. Nothing was changed.")
+        for copy in found.copies:
+            try:
+                result = override.replace_copy(copy, files[0], url)
+            except OSError as exc:
+                failed += 1
+                ui.error(f"Couldn't replace {copy.folder / copy.files[0]}: {exc}")
+                continue
+            for warning in result.warnings:
+                ui.warn(warning)
+            ui.ok(f"Replaced {', '.join(copy.files)} with {result.file} in {copy.folder}")
+    if found.missing:
+        ui.warn(
+            f"Not downloaded yet in {', '.join(found.missing)}, so nothing was replaced there. "
+            "To use your link there too, run this again after downloading."
+        )
+    if failed:
+        raise CliError(f"{failed} of {len(found.copies)} copies couldn't be replaced.")
 
 
 def _plural(n: int, word: str) -> str:
@@ -612,9 +699,16 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
             parser.error("--cookies only works together with --login youtube")
     if args.noselect and not args.fetch:
         parser.error("--noselect only works together with --fetch (e.g. -fn)")
-    if args.update and (args.login or args.fetch or args.download or args.meta or args.threads):
+    if args.update and (args.login or args.fetch or args.download or args.meta or args.threads or args.overwrite):
         parser.error("--update can't be combined with other options")
-    plain = not (args.login or args.fetch or args.download or args.meta)
+    if args.overwrite:
+        if args.login or args.fetch or args.download or args.meta or args.threads is not None:
+            parser.error("--overwrite can only be combined with --config")
+        args.overwrite = [value.strip() for value in args.overwrite]
+        problem = override.check_arguments(*args.overwrite)
+        if problem:
+            parser.error(problem)
+    plain = not (args.login or args.fetch or args.download or args.meta or args.overwrite)
     if args.threads is not None and not (args.download or plain):
         parser.error("--threads only works when downloading (e.g. -d -t 4)")
 
@@ -627,6 +721,9 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
         settings = config.load(args.config)
         data_dir = settings.data_dir if data_dir is None else data_dir
         store = SessionStore.load(data_dir)
+        if args.overwrite:
+            run_overwrite(store, data_dir, settings, *args.overwrite)
+            return 0
         if args.login:
             run_login(store, args.login, settings.login_browser, args.cookies)
         if plain:

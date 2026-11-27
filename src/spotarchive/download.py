@@ -152,16 +152,16 @@ def setlist_songs(folder: Path) -> list[Song]:
     return list(songs.values())
 
 
-def _normalize(stem: str) -> str:
+def normalize(stem: str) -> str:
     return " ".join(_INVALID_CHARS.sub("_", stem).split()).casefold()
 
 
 def expected_stems(song: Song) -> set[str]:
     """File names (without extension) a helper would likely give *song*."""
     if not song.artists:
-        return {_normalize(song.name)}
+        return {normalize(song.name)}
     artist_forms = {song.artists[0], ", ".join(song.artists), " & ".join(song.artists), "; ".join(song.artists)}
-    return {_normalize(f"{artist} - {song.name}") for artist in artist_forms}
+    return {normalize(f"{artist} - {song.name}") for artist in artist_forms}
 
 
 def find_present(songs: list[Song], folder: Path, record: dict[str, dict],
@@ -176,7 +176,7 @@ def find_present(songs: list[Song], folder: Path, record: dict[str, dict],
     for p in sorted(folder.rglob("*")):
         rel = p.relative_to(folder)
         if p.is_file() and p.suffix.lower() in extensions and not rel.parts[0].startswith("."):
-            by_stem.setdefault(_normalize(p.stem), rel.as_posix())
+            by_stem.setdefault(normalize(p.stem), rel.as_posix())
 
     present: dict[str, list[str]] = {}
     for song in songs:
@@ -198,7 +198,7 @@ def record_present(folder: Path, record: dict[str, dict], present: dict[str, lis
         if entry.get("files") != files:
             # Other files than the recorded ones: whoever downloaded or tagged
             # those didn't make these.
-            kept = {k: v for k, v in entry.items() if k not in ("backend", "tagged")}
+            kept = {k: v for k, v in entry.items() if k not in ("backend", "tagged", "override")}
             record[key] = {**kept, "files": files}
             changed = True
     if changed:

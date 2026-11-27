@@ -16,6 +16,8 @@ from spotarchive.backends.somedl import SomeDLBackend
 from spotarchive.backends.ytdlp import YtDlpBackend
 
 DEFAULT_BACKEND = "somedl"
+# Downloads a link the user picked when neither configured backend can.
+URL_BACKEND = "ytdlp"
 BACKENDS: dict[str, Callable[..., DownloadBackend]] = {
     "somedl": SomeDLBackend,
     "ytdlp": YtDlpBackend,
@@ -30,6 +32,7 @@ __all__ = [
     "DownloadFailed",
     "Song",
     "TaggingFailed",
+    "URL_BACKEND",
     "get_backend",
 ]
 

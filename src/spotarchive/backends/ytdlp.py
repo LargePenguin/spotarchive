@@ -11,6 +11,9 @@ yt-dlp finds no music metadata, so the file is tagged with the setlist's
 (title, artists, album, release date) right after downloading, and
 :meth:`YtDlpBackend.tag` does the same for the metadata cleanup.
 
+For ``--overwrite``, :meth:`YtDlpBackend.download_url` downloads exactly the
+link the user gave instead of searching.
+
 With a YouTube login, its cookies are written to a private temporary
 ``cookies.txt`` for each download and passed with ``--cookies``.
 """
@@ -71,6 +74,7 @@ class YtDlpBackend(DownloadBackend):
     # it fails); the metadata cleanup checks them again (cheap: a file whose
     # tags are right isn't rewritten).
     tags_downloads = False
+    can_download_url = True
 
     def __init__(self, executable: str | None = None, audio_format: str = "mp3",
                  search_results: int = 5, length_tolerance: int = 30,
@@ -125,12 +129,27 @@ class YtDlpBackend(DownloadBackend):
         # The file is named after the setlist, like SomeDL's flat names
         # ("%" would start a template field).
         template = safe_name(query).replace("%", "%%") + ".%(ext)s"
+        # The search query is a single argument.
+        return self._command(f"ytsearch{self.search_results}:{query}", staging, template,
+                             ["--match-filters", self.match_filter(song), "--max-downloads", "1"],
+                             cookies, color, newline)
+
+    def url_command(self, url: str, staging: Path, cookies: Path | None = None, color: bool = False,
+                    newline: bool = True) -> list[str]:
+        # Only single videos pass "!playlist_index", so nothing of a playlist
+        # is downloaded; --no-playlist: a video link with a playlist in it
+        # means the video.
+        return self._command(url, staging, "download.%(ext)s",
+                             ["--no-playlist", "--match-filters", "!is_live & !playlist_index"],
+                             cookies, color, newline)
+
+    def _command(self, target: str, staging: Path, template: str, selection: list[str],
+                 cookies: Path | None, color: bool, newline: bool) -> list[str]:
         cmd = [
             self.executable or "yt-dlp",
             "--ignore-config",
             "--extract-audio", "--audio-format", self.audio_format, "--audio-quality", "0",
-            "--match-filters", self.match_filter(song),
-            "--max-downloads", "1",
+            *selection,
             "--paths", str(staging), "--output", template,
             "--no-mtime",
             "--color", "always" if color else "no_color",
@@ -139,16 +158,37 @@ class YtDlpBackend(DownloadBackend):
             cmd.append("--newline")
         if cookies is not None:
             cmd += ["--cookies", str(cookies)]
-        # The search query is a single argument; "--" so it isn't read as an option.
-        return [*cmd, *self.extra_args, "--", f"ytsearch{self.search_results}:{query}"]
+        # "--" so the search or link isn't read as an option.
+        return [*cmd, *self.extra_args, "--", target]
 
     def download(self, song: Song, folder: Path, events: DownloadEvents | None = None) -> list[Path]:
         events = events or DownloadEvents()
+        files = self._download(
+            lambda staging, cookies, **style: self.command(song, staging, cookies, **style),
+            folder, events, self._not_found(song),
+        )
+        for file in files:
+            try:
+                write_setlist_tags(file, song)
+            except TaggingFailed as exc:
+                events.warning(str(exc))
+        return files
+
+    def download_url(self, url: str, folder: Path, events: DownloadEvents | None = None) -> list[Path]:
+        return self._download(
+            lambda staging, cookies, **style: self.url_command(url, staging, cookies, **style),
+            folder, events or DownloadEvents(),
+            "nothing was downloaded; the link must be a single video or track, not a playlist or live stream",
+        )
+
+    def _download(self, build, folder: Path, events: DownloadEvents, not_found: str) -> list[Path]:
+        """Run the command *build* makes, from a staging folder; move the audio into *folder*."""
         staging = Path(tempfile.mkdtemp(prefix=STAGING_PREFIX, dir=folder))
         try:
             with cookie_file(self.youtube_login) as cookies:
                 try:
-                    returncode, output = self._run(song, staging, cookies, events)
+                    returncode, output = self._run(
+                        lambda **style: build(staging, cookies, **style), events)
                 except OSError as exc:
                     raise DownloadFailed(f"couldn't run yt-dlp: {exc}") from exc
             new = [p for p in staging.rglob("*") if p.is_file() and p.suffix.lower() in self.audio_extensions]
@@ -156,17 +196,11 @@ class YtDlpBackend(DownloadBackend):
             if returncode not in (0, _MAX_DOWNLOADS_REACHED):
                 raise DownloadFailed(f"yt-dlp exited with code {returncode}{output.reason(' ({})')}")
             if not new:
-                raise DownloadFailed(output.reason() or self._not_found(song))
+                raise DownloadFailed(output.reason() or not_found)
             # Only the audio: the rest (thumbnails, leftovers) goes with the staging folder.
-            files = move_into(staging, folder, new, everything=False)
+            return move_into(staging, folder, new, everything=False)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
-        for file in files:
-            try:
-                write_setlist_tags(file, song)
-            except TaggingFailed as exc:
-                events.warning(str(exc))
-        return files
 
     def tag(self, song: Song, file: Path) -> None:
         write_setlist_tags(file, song)
@@ -177,7 +211,7 @@ class YtDlpBackend(DownloadBackend):
                     f"among the first {self.search_results} results")
         return "no YouTube video found"
 
-    def _run(self, song: Song, staging: Path, cookies: Path | None, events: DownloadEvents):
+    def _run(self, command, events: DownloadEvents):
         parser = OutputParser(events)
         env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
         show = events.show_output
@@ -185,11 +219,11 @@ class YtDlpBackend(DownloadBackend):
         if terminal and not enable_ansi():
             # A console that can't show escape sequences (old Windows): let
             # yt-dlp draw on it directly; then only the result is known.
-            cmd = self.command(song, staging, cookies, newline=False)
+            cmd = command(newline=False)
             return subprocess.run(cmd, check=False).returncode, parser
         # On a terminal yt-dlp redraws its progress line in place; captured,
         # every update comes as a line of its own.
-        cmd = self.command(song, staging, cookies, color=terminal, newline=not terminal)
+        cmd = command(color=terminal, newline=not terminal)
         with subprocess.Popen(
             cmd, env=env,
             stdin=None if show else subprocess.DEVNULL,

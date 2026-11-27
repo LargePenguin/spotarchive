@@ -120,6 +120,18 @@ Right after downloading, the file gets the setlist's tags (with [mutagen](https:
 
 yt-dlp's `WARNING:` and `ERROR:` lines go to the [log file](downloading.md#the-log-file), and its `[download]  42%` lines drive the progress bar. With [one thread](downloading.md#one-song-at-a-time) its output is shown in your terminal.
 
+### Downloading your own link
+
+[`spotarchive --overwrite`](downloading.md#fixing-a-wrong-match) uses yt-dlp to download the link you give it, even when your configuration doesn't name `ytdlp`:
+
+```bash
+yt-dlp --ignore-config --extract-audio --audio-format mp3 --audio-quality 0 \
+  --no-playlist --match-filters "!is_live & !playlist_index" \
+  --output "download.%(ext)s" -- "https://..."
+```
+
+There's no search and no length filter. `--no-playlist` takes just the video from a video link that also names a playlist, and `!playlist_index` skips everything from a link that is only a playlist.
+
 ## Writing a new backend
 
 A backend is a subclass of `DownloadBackend` in [`src/spotarchive/backends/base.py`](../src/spotarchive/backends/base.py). Keep everything specific to your helper inside its own module in `src/spotarchive/backends/`.
@@ -139,6 +151,7 @@ class ExampleBackend(DownloadBackend):
     audio_extensions = frozenset({".mp3"})
     can_tag = False                      # True if tag() is implemented
     tags_downloads = False               # True if download() already tags its files
+    can_download_url = False             # True if download_url() is implemented
 
     def __init__(self, quality: str = "high"):
         # Settings from [backends.example] in spotarchive.toml arrive as
@@ -190,6 +203,7 @@ What a backend gets and must do:
 - Report progress, warnings and errors through `events` when the helper tells you about them: progress draws the song's progress bar, and warnings and errors go to the [log file](downloading.md#the-log-file) and the song's status line. The `DownloadFailed` message is logged as an error too, unless it's the same as the last `events.error`.
 - YouTube login: when the user has [logged in to YouTube](authentication.md#logging-in-to-youtube-optional) (and the login hasn't expired), `use_youtube_login` is called once before the first `download`; the default implementation keeps it in `self.youtube_login` (otherwise `None`). It holds `cookies` (youtube.com cookies as Playwright cookie dicts: `name`, `value`, `domain`, `path`, `expires` in seconds since the epoch or `-1`, `secure`, `httpOnly`) and the `user_agent` of the browser they came from. Pass them to your helper in whatever form it takes. For helpers built on yt-dlp, `login.netscape_cookies()` returns a `cookies.txt` for `--cookies`; `cookie_file` in [`backends/util.py`](../src/spotarchive/backends/util.py) writes it to a private temporary file. Never log the cookies or leave them on disk.
 - `tag` is used by [metadata cleanup](metadata.md#backend) with `source = "backend"`: for every song in the folder, unless `tags_downloads` is set and this backend downloaded it, or it was already tagged by it. It gets the setlist row and one file, and must leave the file where it is. With a [fallback backend](#fallback-backend), a song goes to the backend that downloaded it first, then to the other one if that raises `TaggingFailed`. Without `can_tag`, metadata cleanup falls back to the setlist; `write_setlist_tags` in [`tags.py`](../src/spotarchive/tags.py) writes the setlist's tags, for helpers that find no metadata of their own.
+- `download_url` (with `can_download_url`) is used by [`--overwrite`](downloading.md#fixing-a-wrong-match). It gets a link and an empty folder, downloads the audio of exactly that one track (no searching, no tagging) and returns the file; a playlist or anything else that isn't one track raises `DownloadFailed`. The configured backend is used if it can do this, else the fallback, else yt-dlp.
 - Settings: each key of `[backends.<name>]` in the [configuration file](configuration.md#backendsname) is passed to the constructor as a keyword argument (empty strings are left out, so the default applies). Document them in `docs/configuration.md` and `spotarchive.example.toml`.
 - With `shows_own_output = True` the helper may write to the terminal when `events.show_output` is true (one song at a time); Spotarchive then prints a `[n/total]` line before each song instead of drawing a progress bar. When `events.show_output` is false, capture the helper's output instead.
 

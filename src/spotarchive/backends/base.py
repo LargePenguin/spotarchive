@@ -110,6 +110,8 @@ class DownloadBackend(ABC):
     # True when files from :meth:`download` already carry the helper's own
     # metadata, so they don't need :meth:`tag` afterwards.
     tags_downloads: bool = False
+    # True when the helper can download a link the user picked, see :meth:`download_url`.
+    can_download_url: bool = False
     # The YouTube login handed over by :meth:`use_youtube_login`, if any.
     youtube_login: YouTubeSession | None = None
 
@@ -142,6 +144,17 @@ class DownloadBackend(ABC):
         *events* (``None``: report nothing, show output) is where progress,
         warnings and errors go.
         """
+
+    def download_url(self, url: str, folder: Path, events: DownloadEvents | None = None) -> list[Path]:
+        """Download the audio of the single track at *url* into *folder*; return the new files.
+
+        Only called when :attr:`can_download_url` is true (``--overwrite``).
+        Get exactly what the link points to: no searching for a better match,
+        and no metadata (Spotarchive tags the files itself). A link to a
+        playlist, or anything else that isn't one track, is a failure. Raise
+        :class:`DownloadFailed` when nothing could be downloaded.
+        """
+        raise NotImplementedError
 
     def tag(self, song: Song, file: Path) -> None:
         """Rewrite *file*'s metadata with what the helper finds for *song*.
