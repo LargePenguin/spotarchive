@@ -399,7 +399,8 @@ def test_fetch_moves_a_playlist_out_of_the_imports_folder(tmp_path, monkeypatch,
     assert SessionStore.load(tmp_path).playlists["p1"].folder == "Imports (p1)"
     assert (tmp_path / "Imports (p1)" / "song.mp3").is_file()
     assert not (tmp_path / "Imports").exists()
-    assert importer.imports_root(SessionStore.load(tmp_path), tmp_path) == tmp_path / "Imports"
+    root = tmp_path / "Imports"
+    assert importer.check_imports_root(SessionStore.load(tmp_path), tmp_path, root) == root
     assert read_setlist(tmp_path / "Road Trip")
 
 
@@ -412,3 +413,50 @@ def test_fetch_leaves_imports_alone(tmp_path, monkeypatch):
     assert cli.main(["-f"], data_dir=tmp_path) == 0
     assert SessionStore.load(tmp_path).playlists["p1"].folder == "imports (p1)"
     assert [p.name for p in (tmp_path / "Imports").iterdir()] == [RECORD_FILENAME]
+
+
+def use_import_dir(tmp_path, value):
+    path = tmp_path / "custom.toml"
+    path.write_text(f'import_dir = "{value}"\n', encoding="utf-8")
+    return ["-c", str(path)]
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_import_into_a_configured_folder(fake, ytdlp_backend, tmp_path, absolute):
+    data = tmp_path / "data"
+    target = tmp_path / "outside" / "links" if absolute else data / "music" / "links"
+    value = target.as_posix() if absolute else "music/links"
+    assert cli.main(["-d", VIDEO, *use_import_dir(tmp_path, value)], data_dir=data) == 0
+    assert (target / "Fake Artist - Fake Song.mp3").is_file()
+    assert list(load_record(target)) == [VIDEO]
+    assert not (data / "Imports").exists()
+
+
+def test_import_refuses_a_playlists_folder_around_the_import_folder(fake, ytdlp_backend, tmp_path):
+    store = SessionStore.load(tmp_path)
+    store.playlists["p1"] = PlaylistState(name="Music", selected=False, folder="Music")
+    store.save()
+    assert cli.main(["-d", VIDEO, *use_import_dir(tmp_path, "music/links")], data_dir=tmp_path) == 1
+    assert not fake.lists
+
+
+def test_unusable_import_folder_is_an_error(fake, ytdlp_backend, tmp_path):
+    (tmp_path / "blocked").write_bytes(b"a file, not a folder")
+    assert cli.main(["-d", VIDEO, *use_import_dir(tmp_path, "blocked/links")], data_dir=tmp_path) == 1
+    assert not fake.downloads
+
+
+@pytest.mark.parametrize("value, folders", [
+    # The folder around a nested import folder is kept free, "Imports" no longer is.
+    ("music/links", {"p1": "Music (p1)", "p2": "Imports"}),
+    # Outside the data folder: nothing is kept free.
+    (None, {"p1": "Music", "p2": "Imports"}),
+])
+def test_fetch_keeps_the_configured_import_folder_free(tmp_path, monkeypatch, value, folders):
+    data = tmp_path / "data"
+    value = value or (tmp_path / "outside" / "Music").as_posix()
+    client = FakeClient([Playlist("p1", "Music"), Playlist("p2", "Imports")])
+    monkeypatch.setattr(cli, "make_client", lambda store: client)
+    monkeypatch.setattr(ui, "choose_playlists", lambda playlists, preselected: ["p1", "p2"])
+    assert cli.main(["-f", *use_import_dir(tmp_path, value)], data_dir=data) == 0
+    assert {pid: s.folder for pid, s in SessionStore.load(data).playlists.items()} == folders

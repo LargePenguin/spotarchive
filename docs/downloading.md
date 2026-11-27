@@ -136,14 +136,18 @@ spotarchive -d -t 4 "https://..."                           # 4 items at once
 
 - **What gets downloaded** is exactly what is at the link; nothing is searched for. A playlist or album page downloads every item in it. A video link that also names a playlist (`watch?v=...&list=...`, as when you copy a link while a playlist or mix plays) downloads only that video. A page that only lists other playlists is refused: use the link of one of them. Live streams are skipped (and reported as failed).
 - **Sites:** YouTube and YouTube Music, plus any other site [yt-dlp supports](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md). Other sites are best effort. Links to Spotify are refused: Spotarchive never downloads audio from Spotify.
-- **Where it goes:** the `Imports` folder in the [download folder](configuration.md#data_dir). A playlist gets a subfolder named after it (adjusted like [playlist folder names](fetching.md#folders)); playlists with the same name share it.
+- **Where it goes:** the [`import_dir`](configuration.md#import_dir) folder, by default `Imports` in the [download folder](configuration.md#data_dir). A playlist gets a subfolder named after it (adjusted like [playlist folder names](fetching.md#folders)); playlists with the same name share it.
 - **Names and tags** come from what the site says about the item; see [metadata of imported links](metadata.md#imported-links). Files are named `Artist - Title` after the first artist. A file that is already there is never replaced: the new one gets the video's ID, e.g. `Artist - Title [abc123].mp3`.
 - **Backend:** links are always downloaded with [yt-dlp](backends.md#yt-dlp), whatever `backend` and `fallback` say, so SomeDL isn't used. The `executable`, `audio_format` and `extra_args` settings of [`[backends.ytdlp]`](configuration.md#backendsytdlp) apply; `search_results` and `length_tolerance` don't.
 - **Running it again** with the same link downloads only the items that are new, failed or deleted. This goes by the folder's [download record](#the-downloadsjson-record), keyed by each item's link, not by file names. So the same video imported on its own and as part of a playlist is saved in both folders, and deleting a record makes the next import download another copy.
 
 Importing doesn't use Spotify, so it needs no login or fetched playlists. A [YouTube login](authentication.md#logging-in-to-youtube-optional) is used if you have one. [Threads](#several-songs-at-once), [failures](#when-a-song-fails) and the [log file](#the-log-file) work as for setlists. `-d LINK` can't be combined with `--fetch`, `--login`, `--meta` or `--update`.
 
-`Imports` is never used for a Spotify playlist's folder: a playlist named like that gets [its ID appended](fetching.md#folders). If such a folder already exists from before, importing is refused until the next `spotarchive --fetch` has moved the playlist out of it. If the playlist is no longer in your library, rename or move the folder yourself.
+### The import folder and playlists
+
+When [`import_dir`](configuration.md#import_dir) is inside the download folder, the folder directly in the download folder that is or holds it (`Imports` by default; `music` for `import_dir = "music/links"`) is never used for a Spotify playlist's folder: a playlist named like that gets [its ID appended](fetching.md#folders). If a playlist already has that folder, from before imports or before you changed the setting, importing is refused until the next `spotarchive --fetch` has moved the playlist, with its files, out of it. If the playlist is no longer in your library, rename or move the folder yourself.
+
+An `import_dir` outside the download folder reserves no playlist folder name. In either case, a folder that holds a `setlist.csv` is never imported into.
 
 ## The log file
 

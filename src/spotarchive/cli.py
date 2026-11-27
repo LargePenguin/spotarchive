@@ -26,9 +26,9 @@ from spotarchive.fetch import fetch_setlists, update_selection
 from spotarchive.importer import (
     ImportRefused,
     LinkImporter,
+    check_imports_root,
     check_link,
     import_folder,
-    imports_root,
     prepare_import,
 )
 from spotarchive.meta import PlaylistMeta, fix_playlist_metadata
@@ -254,7 +254,7 @@ def ensure_login(store: SessionStore, browser: str = "") -> None:
         run_spotify_login(store, browser)
 
 
-def run_fetch(store: SessionStore, data_dir: Path, noselect: bool) -> None:
+def run_fetch(store: SessionStore, data_dir: Path, settings: Config, noselect: bool) -> None:
     client = make_client(store)
     with ui.working("Loading your playlists..."):
         playlists = client.playlists()
@@ -285,7 +285,9 @@ def run_fetch(store: SessionStore, data_dir: Path, noselect: bool) -> None:
                 bar.update(task, completed=done, total=total)
             return update
 
-        results = fetch_setlists(client, store, data_dir, chosen, progress_for)
+        results = fetch_setlists(
+            client, store, data_dir, chosen, progress_for, import_root=settings.imports_path(data_dir)
+        )
 
     failed = 0
     for result in results:
@@ -383,7 +385,7 @@ def _show_log(log: DownloadLog) -> None:
 def run_import(store: SessionStore, data_dir: Path, settings: Config, link: str, threads: int | None = None) -> None:
     """``--download LINK``: download what the link points to. Never talks to Spotify."""
     link = check_link(link)
-    root = imports_root(store, data_dir)
+    root = check_imports_root(store, data_dir, settings.imports_path(data_dir))
     backend = make_importer(settings)
     backend.check()
     log = DownloadLog.for_run(data_dir)
@@ -395,7 +397,11 @@ def run_import(store: SessionStore, data_dir: Path, settings: Config, link: str,
     except DownloadFailed as exc:
         raise CliError(f"Couldn't import the link: {exc}") from exc
 
-    result = prepare_import(listing, import_folder(root, listing))
+    folder = import_folder(root, listing)
+    try:
+        result = prepare_import(listing, folder)
+    except OSError as exc:
+        raise CliError(f"Can't use the import folder {folder}: {exc}") from exc
     _download([LinkImporter(backend)], [result], threads or settings.download_threads(), log)
 
     summary = f"{result.name}: {result.downloaded} downloaded, {result.already_present} already there"
@@ -712,13 +718,13 @@ def main(argv: list[str] | None = None, data_dir: Path | None = None) -> int:
         if plain:
             ensure_login(store, settings.login_browser)
             offer_youtube_login(store, settings.login_browser)
-            run_fetch(store, data_dir, noselect=False)
+            run_fetch(store, data_dir, settings, noselect=False)
             # With nothing selected, fetching has already said so.
             if not selected_folders(store, data_dir):
                 return 0
             args.download = args.meta = True
         elif args.fetch:
-            run_fetch(store, data_dir, args.noselect)
+            run_fetch(store, data_dir, settings, args.noselect)
         download_error = None
         if args.download:
             try:

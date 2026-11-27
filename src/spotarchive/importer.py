@@ -1,9 +1,10 @@
 """Importing a link (``--download LINK``): download what it points to, without a setlist.
 
-Imports go to the ``Imports`` folder in the data folder, a playlist's into a
-subfolder named after it. Each folder has the same ``.downloads.json`` record
-as a playlist folder, keyed by the items' links, so importing a link again
-only downloads what is missing. The downloading itself is the setlists'
+Imports go to the configured ``import_dir`` (by default ``Imports`` in the
+data folder), a playlist's into a subfolder named after it. Each folder has
+the same ``.downloads.json`` record as a playlist folder, keyed by the items'
+links, so importing a link again only downloads what is missing. The
+downloading itself is the setlists'
 (:func:`spotarchive.download.download_all`): an item stands in for a song.
 """
 
@@ -17,7 +18,7 @@ from spotarchive.backends import DownloadBackend, DownloadEvents, ImportItem, Im
 from spotarchive.backends.util import SPOTIFY_REFUSAL, is_spotify_url
 from spotarchive.download import PlaylistDownload, load_record
 from spotarchive.session import SessionStore
-from spotarchive.setlist import IMPORTS_FOLDER, SETLIST_FILENAME, safe_folder_name
+from spotarchive.setlist import SETLIST_FILENAME, folder_in_data_dir, safe_folder_name
 
 
 class ImportRefused(Exception):
@@ -42,10 +43,10 @@ def check_link(link: str) -> str:
     return link
 
 
-def imports_root(store: SessionStore, data_dir: Path) -> Path:
-    """The folder imports go to; refused while a Spotify playlist has it."""
-    root = data_dir / IMPORTS_FOLDER
-    owned = any((s.folder or "").casefold() == IMPORTS_FOLDER.casefold() for s in store.playlists.values())
+def check_imports_root(store: SessionStore, data_dir: Path, root: Path) -> Path:
+    """*root*, the folder imports go to; refused while a Spotify playlist has it or a folder around it."""
+    top = folder_in_data_dir(data_dir, root)
+    owned = bool(top) and any((s.folder or "").casefold() == top.casefold() for s in store.playlists.values())
     if owned or (root / SETLIST_FILENAME).is_file():
         raise ImportRefused(
             f"{root} holds a Spotify playlist, but imported links go there. Run `spotarchive --fetch`, "
@@ -98,6 +99,6 @@ def prepare_import(listing: ImportListing, folder: Path) -> PlaylistDownload:
     ]
     total = len(listing.items)
     return PlaylistDownload(
-        listing.playlist or IMPORTS_FOLDER, folder, total=total, already_present=total - len(pending),
+        listing.playlist or folder.name, folder, total=total, already_present=total - len(pending),
         pending=pending, record=record,
     )

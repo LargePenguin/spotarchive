@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Callable
 
 from spotarchive.session import PlaylistState, SessionStore
-from spotarchive.setlist import IMPORTS_FOLDER, assign_folders, prepare_folder, write_setlist
+from spotarchive.setlist import (
+    IMPORTS_FOLDER,
+    assign_folders,
+    folder_in_data_dir,
+    prepare_folder,
+    write_setlist,
+)
 from spotarchive.spotify.client import ProgressCallback, SpotifyApiError, SpotifyClient
 from spotarchive.spotify.models import Playlist
 
@@ -46,24 +52,29 @@ def fetch_setlists(
     data_dir: Path,
     playlists: list[Playlist],
     progress_for: Callable[[Playlist], ProgressCallback | None] = lambda p: None,
+    import_root: Path | None = None,
 ) -> list[FetchResult]:
     """Write a ``setlist.csv`` for each playlist in *playlists*.
 
     A failure on one playlist is reported in its result and doesn't stop
     the others. The session is saved after each playlist so folder moves are
-    never forgotten. A playlist in the folder imported links go to is moved
-    out of it, even when it isn't being fetched.
+    never forgotten. If *import_root*, the folder imported links go to
+    (default: ``Imports``), is in *data_dir*, no playlist gets the folder there
+    that is or holds it; one already in it is moved out, even when it isn't
+    being fetched.
     """
+    top = folder_in_data_dir(data_dir, import_root or data_dir / IMPORTS_FOLDER)
+    kept_free = {top} if top else set()
     fetching = {p.id for p in playlists}
     evicted = {
         pid: state for pid, state in store.playlists.items()
-        if pid not in fetching and (state.folder or "").casefold() == IMPORTS_FOLDER.casefold()
+        if pid not in fetching and (state.folder or "").casefold() in {n.casefold() for n in kept_free}
     }
     folders = assign_folders(
         {**{p.id: p.name for p in playlists}, **{pid: s.name for pid, s in evicted.items()}},
         {pid: state.folder for pid, state in store.playlists.items()},
         # Folders of playlists not being fetched now still hold their files.
-        reserved={IMPORTS_FOLDER} | {
+        reserved=kept_free | {
             s.folder for pid, s in store.playlists.items()
             if s.folder and pid not in fetching and pid not in evicted
         },

@@ -6,6 +6,7 @@ Spotarchive reads its settings from `spotarchive.toml`, a [TOML](https://toml.io
 
 ```toml
 data_dir = "data"
+import_dir = "Imports"
 
 [download]
 backend = "somedl"
@@ -44,6 +45,21 @@ data_dir = "~/Music/spotarchive"
 ```
 
 Moving `data_dir` doesn't move existing files: move the old folder's contents yourself, or you'll have to log in and fetch again.
+
+### `import_dir`
+
+The folder [imported links](downloading.md#importing-a-link) (`spotarchive -d LINK`) go to. A relative path is relative to [`data_dir`](#data_dir); an absolute path, including one starting with `~`, is used as it is. Missing folders are created. Default: `"Imports"`.
+
+```toml
+import_dir = "~/Music/imported"
+```
+
+> [!TIP]
+> On Windows, write paths with forward slashes (`"D:/Music/imported"`) or in single quotes (`'D:\Music\imported'`): in a double-quoted TOML string, a backslash starts an escape sequence.
+
+- It can't be `data_dir` itself or a folder that contains it.
+- If it is inside `data_dir`, the folder directly in `data_dir` that is or holds it is never used for a Spotify playlist: see [the import folder and playlists](downloading.md#the-import-folder-and-playlists).
+- Changing it doesn't move earlier imports. Move the old folder's contents yourself, including the hidden `.downloads.json` files, or importing the same link again downloads another copy.
 
 ### `[login]`
 
