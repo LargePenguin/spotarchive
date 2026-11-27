@@ -1,6 +1,6 @@
 """Importing a link (``--download LINK``): download what it points to, without a setlist.
 
-Imports go to the configured ``import_dir`` (by default ``Imports`` in the
+Imports go to the configured ``import_dir`` (by default ``imports`` in the
 data folder), a playlist's into a subfolder named after it. Each folder has
 the same ``.downloads.json`` record as a playlist folder, keyed by the items'
 links, so importing a link again only downloads what is missing. The

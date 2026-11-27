@@ -17,7 +17,7 @@ COLUMNS = ["name", "artist", "album", "release_date", "date_added", "duration_ms
 ARTIST_SEPARATOR = "; "
 MAX_FOLDER_NAME = 100
 # Where imported links go unless `import_dir` says otherwise (in the data folder).
-IMPORTS_FOLDER = "Imports"
+IMPORTS_FOLDER = "imports"
 
 # Characters Windows forbids in file names, plus control characters.
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')

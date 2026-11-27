@@ -59,7 +59,7 @@ def fetch_setlists(
     A failure on one playlist is reported in its result and doesn't stop
     the others. The session is saved after each playlist so folder moves are
     never forgotten. If *import_root*, the folder imported links go to
-    (default: ``Imports``), is in *data_dir*, no playlist gets the folder there
+    (default: ``imports``), is in *data_dir*, no playlist gets the folder there
     that is or holds it; one already in it is moved out, even when it isn't
     being fetched.
     """

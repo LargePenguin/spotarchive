@@ -271,7 +271,7 @@ def test_wav_fails_to_tag_without_crashing(tmp_path):
 
 def test_import_single_video(fake, ytdlp_backend, tmp_path):
     assert cli.main(["-d", VIDEO], data_dir=tmp_path) == 0
-    folder = tmp_path / "Imports"
+    folder = tmp_path / "imports"
     assert (folder / "Fake Artist - Fake Song.mp3").is_file()
     assert load_record(folder)[VIDEO]["files"] == ["Fake Artist - Fake Song.mp3"]
     assert load_record(folder)[VIDEO]["backend"] == "ytdlp"
@@ -282,7 +282,7 @@ def test_import_playlist_skips_what_is_there_and_retries_failures(fake, ytdlp_ba
     other = f"{VIDEO}2"
     fake.listing = playlist_listing(VIDEO, other)
     assert cli.main(["-d", "-t", threads, PLAYLIST], data_dir=tmp_path) == 1
-    folder = tmp_path / "Imports" / "Fake_ Playlist"
+    folder = tmp_path / "imports" / "Fake_ Playlist"
     assert (folder / "Fake Artist - Fake Song.mp3").is_file()
     assert list(load_record(folder)) == [VIDEO]
 
@@ -314,7 +314,7 @@ def test_import_uses_the_youtube_login(fake, ytdlp_backend, tmp_path):
 def test_unreadable_link_fails(fake, ytdlp_backend, tmp_path):
     fake.list_error = "fake link is broken"
     assert cli.main(["-d", VIDEO], data_dir=tmp_path) == 1
-    assert not (tmp_path / "Imports").exists()
+    assert not (tmp_path / "imports").exists()
 
 
 @pytest.mark.parametrize("link", [
@@ -354,18 +354,18 @@ def test_download_arguments(argv, expected):
     assert (args.download, args.link, args.threads) == expected
 
 
-# --- the Imports folder and Spotify playlists
+# --- the imports folder and Spotify playlists
 
 
 @pytest.mark.parametrize("claim", ["state", "setlist"])
 def test_import_refuses_a_playlists_folder(fake, ytdlp_backend, tmp_path, claim):
     if claim == "state":
         store = SessionStore.load(tmp_path)
-        store.playlists["p1"] = PlaylistState(name="imports", selected=False, folder="imports")
+        store.playlists["p1"] = PlaylistState(name="Imports", selected=False, folder="Imports")
         store.save()
     else:
-        (tmp_path / "Imports").mkdir()
-        (tmp_path / "Imports" / "setlist.csv").write_text("name\n", encoding="utf-8")
+        (tmp_path / "imports").mkdir()
+        (tmp_path / "imports" / "setlist.csv").write_text("name\n", encoding="utf-8")
     assert cli.main(["-d", VIDEO], data_dir=tmp_path) == 1
     assert not fake.lists
 
@@ -385,34 +385,34 @@ class FakeClient:
 def test_fetch_moves_a_playlist_out_of_the_imports_folder(tmp_path, monkeypatch, selected):
     # As left by a version without imports.
     store = SessionStore.load(tmp_path)
-    store.playlists["p1"] = PlaylistState(name="Imports", selected=True, folder="Imports")
+    store.playlists["p1"] = PlaylistState(name="imports", selected=True, folder="imports")
     store.save()
-    (tmp_path / "Imports").mkdir()
-    (tmp_path / "Imports" / "setlist.csv").write_text("name\n", encoding="utf-8")
-    (tmp_path / "Imports" / "song.mp3").write_bytes(b"fake")
+    (tmp_path / "imports").mkdir()
+    (tmp_path / "imports" / "setlist.csv").write_text("name\n", encoding="utf-8")
+    (tmp_path / "imports" / "song.mp3").write_bytes(b"fake")
 
-    client = FakeClient([Playlist("p1", "Imports"), Playlist("p2", "Road Trip")])
+    client = FakeClient([Playlist("p1", "imports"), Playlist("p2", "Road Trip")])
     monkeypatch.setattr(cli, "make_client", lambda store: client)
     monkeypatch.setattr(ui, "choose_playlists", lambda playlists, preselected: selected)
     assert cli.main(["-f"], data_dir=tmp_path) == 0
 
-    assert SessionStore.load(tmp_path).playlists["p1"].folder == "Imports (p1)"
-    assert (tmp_path / "Imports (p1)" / "song.mp3").is_file()
-    assert not (tmp_path / "Imports").exists()
-    root = tmp_path / "Imports"
+    assert SessionStore.load(tmp_path).playlists["p1"].folder == "imports (p1)"
+    assert (tmp_path / "imports (p1)" / "song.mp3").is_file()
+    assert not (tmp_path / "imports").exists()
+    root = tmp_path / "imports"
     assert importer.check_imports_root(SessionStore.load(tmp_path), tmp_path, root) == root
     assert read_setlist(tmp_path / "Road Trip")
 
 
 def test_fetch_leaves_imports_alone(tmp_path, monkeypatch):
-    (tmp_path / "Imports").mkdir()
-    (tmp_path / "Imports" / RECORD_FILENAME).write_text("{}", encoding="utf-8")
-    client = FakeClient([Playlist("p1", "imports")])
+    (tmp_path / "imports").mkdir()
+    (tmp_path / "imports" / RECORD_FILENAME).write_text("{}", encoding="utf-8")
+    client = FakeClient([Playlist("p1", "Imports")])
     monkeypatch.setattr(cli, "make_client", lambda store: client)
     monkeypatch.setattr(ui, "choose_playlists", lambda playlists, preselected: ["p1"])
     assert cli.main(["-f"], data_dir=tmp_path) == 0
-    assert SessionStore.load(tmp_path).playlists["p1"].folder == "imports (p1)"
-    assert [p.name for p in (tmp_path / "Imports").iterdir()] == [RECORD_FILENAME]
+    assert SessionStore.load(tmp_path).playlists["p1"].folder == "Imports (p1)"
+    assert [p.name for p in (tmp_path / "imports").iterdir()] == [RECORD_FILENAME]
 
 
 def use_import_dir(tmp_path, value):
@@ -429,7 +429,7 @@ def test_import_into_a_configured_folder(fake, ytdlp_backend, tmp_path, absolute
     assert cli.main(["-d", VIDEO, *use_import_dir(tmp_path, value)], data_dir=data) == 0
     assert (target / "Fake Artist - Fake Song.mp3").is_file()
     assert list(load_record(target)) == [VIDEO]
-    assert not (data / "Imports").exists()
+    assert not (data / "imports").exists()
 
 
 def test_import_refuses_a_playlists_folder_around_the_import_folder(fake, ytdlp_backend, tmp_path):
@@ -447,15 +447,15 @@ def test_unusable_import_folder_is_an_error(fake, ytdlp_backend, tmp_path):
 
 
 @pytest.mark.parametrize("value, folders", [
-    # The folder around a nested import folder is kept free, "Imports" no longer is.
-    ("music/links", {"p1": "Music (p1)", "p2": "Imports"}),
+    # The folder around a nested import folder is kept free, "imports" no longer is.
+    ("music/links", {"p1": "Music (p1)", "p2": "imports"}),
     # Outside the data folder: nothing is kept free.
-    (None, {"p1": "Music", "p2": "Imports"}),
+    (None, {"p1": "Music", "p2": "imports"}),
 ])
 def test_fetch_keeps_the_configured_import_folder_free(tmp_path, monkeypatch, value, folders):
     data = tmp_path / "data"
     value = value or (tmp_path / "outside" / "Music").as_posix()
-    client = FakeClient([Playlist("p1", "Music"), Playlist("p2", "Imports")])
+    client = FakeClient([Playlist("p1", "Music"), Playlist("p2", "imports")])
     monkeypatch.setattr(cli, "make_client", lambda store: client)
     monkeypatch.setattr(ui, "choose_playlists", lambda playlists, preselected: ["p1", "p2"])
     assert cli.main(["-f", *use_import_dir(tmp_path, value)], data_dir=data) == 0

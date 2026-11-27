@@ -32,7 +32,7 @@ spotarchive -l | --login [spotify|youtube]  # browser login helper; without a si
 spotarchive -l youtube --cookies FILE       # import the YouTube login from an exported Netscape cookies.txt instead (bare `-l` = youtube)
 spotarchive -f | --fetch     # choose playlists and rebuild setlist.csv files; -fn / --fetch --noselect reuses previous selection
 spotarchive -d | --download  # download missing songs of the selected, fetched setlists via the backend (-fd, -fnd combine)
-spotarchive -d LINK          # import a link with yt-dlp into import_dir (data/Imports) instead (-t works; not with -f/-l/-m/-u)
+spotarchive -d LINK          # import a link with yt-dlp into import_dir (data/imports) instead (-t works; not with -f/-l/-m/-u)
 spotarchive -t | --threads N # songs downloaded at once (default: [download] threads, 0 = half the CPU threads); 1 = backend's own output
 spotarchive -m | --meta      # fix the tags of the songs that are there (-dm: meta still runs if some downloads failed)
 spotarchive -c | --config FILE  # use another config file than spotarchive.toml in the project root

@@ -6,7 +6,7 @@ Spotarchive reads its settings from `spotarchive.toml`, a [TOML](https://toml.io
 
 ```toml
 data_dir = "data"
-import_dir = "Imports"
+import_dir = "imports"
 
 [download]
 backend = "somedl"
@@ -48,7 +48,7 @@ Moving `data_dir` doesn't move existing files: move the old folder's contents yo
 
 ### `import_dir`
 
-The folder [imported links](downloading.md#importing-a-link) (`spotarchive -d LINK`) go to. A relative path is relative to [`data_dir`](#data_dir); an absolute path, including one starting with `~`, is used as it is. Missing folders are created. Default: `"Imports"`.
+The folder [imported links](downloading.md#importing-a-link) (`spotarchive -d LINK`) go to. A relative path is relative to [`data_dir`](#data_dir); an absolute path, including one starting with `~`, is used as it is. Missing folders are created. Default: `"imports"`.
 
 ```toml
 import_dir = "~/Music/imported"

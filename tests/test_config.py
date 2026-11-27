@@ -123,7 +123,7 @@ def test_fallback(tmp_path):
 
 def test_import_dir(tmp_path):
     data = tmp_path / "data"
-    assert Config().imports_path(data) == data / "Imports"
+    assert Config().imports_path(data) == data / "imports"
     settings = config.load(write(tmp_path, 'import_dir = "music/links"'))
     assert settings.imports_path(data) == data / "music" / "links"
     outside = tmp_path / "elsewhere"
@@ -133,7 +133,7 @@ def test_import_dir(tmp_path):
     assert settings.imports_path(data) == Path("~/links").expanduser()
 
 
-@pytest.mark.parametrize("import_dir", [".", "..", "Imports/.."])
+@pytest.mark.parametrize("import_dir", [".", "..", "imports/.."])
 def test_import_dir_cant_be_or_hold_the_data_folder(tmp_path, import_dir):
     with pytest.raises(ConfigError, match="import_dir can't be data_dir"):
         config.load(write(tmp_path, f'import_dir = "{import_dir}"'))
