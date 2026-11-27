@@ -16,6 +16,8 @@ COLUMNS = ["name", "artist", "album", "release_date", "date_added", "duration_ms
 # Artist names can contain commas ("Tyler, The Creator"), so join with ";".
 ARTIST_SEPARATOR = "; "
 MAX_FOLDER_NAME = 100
+# Where imported links go unless `import_dir` says otherwise (in the data folder).
+IMPORTS_FOLDER = "imports"
 
 # Characters Windows forbids in file names, plus control characters.
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -32,6 +34,23 @@ def safe_folder_name(name: str) -> str:
     if cleaned.split(".")[0].upper() in _RESERVED_NAMES:
         cleaned = f"_{cleaned}"
     return cleaned
+
+
+def folder_in_data_dir(data_dir: Path, path: Path) -> str | None:
+    """The folder directly in *data_dir* that is or holds *path*.
+
+    ``None`` when *path* is outside the data folder, ``""`` when it is the
+    data folder itself or one that holds it. Symlinks count both as written
+    and as what they point to.
+    """
+    found = None
+    for normalize in (os.path.abspath, os.path.realpath):
+        base, target = Path(normalize(data_dir)), Path(normalize(path))
+        if base.is_relative_to(target):
+            return ""
+        if found is None and target.is_relative_to(base):
+            found = target.relative_to(base).parts[0]
+    return found
 
 
 def assign_folders(

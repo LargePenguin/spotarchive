@@ -37,6 +37,7 @@ from spotarchive.backends.util import (
     cookie_file,
     enable_ansi,
     find_executable as _find,
+    fit_name,
     forward,
     has_deno,
     is_terminal,
@@ -62,10 +63,6 @@ _PATH_TOO_LONG = re.compile(
     r"unable to open for writing|file name too long|filename too long|Errno 36|WinError 206",
     re.IGNORECASE,
 )
-# Windows: MAX_PATH is 260 including the terminating NUL; file names are limited to 255 UTF-16 units.
-_WINDOWS_PATH_LIMIT = 259
-_POSIX_PATH_LIMIT = 4095
-_NAME_LIMIT = 255
 # Terminal escape sequences (colors, cursor moves of SomeDL's live table).
 _ANSI = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[@-Z\\-_])")
 # "1/1 Artist - Song: WARNING - message" (the label is optional).
@@ -243,32 +240,6 @@ def song_query(song: Song) -> str:
 def _last_line(output: str | None) -> str:
     lines = [line.strip() for line in (output or "").splitlines() if line.strip()]
     return f" ({lines[-1]})" if lines else ""
-
-
-def path_limit() -> int:
-    """The longest whole path the file system takes."""
-    return _WINDOWS_PATH_LIMIT if os.name == "nt" else _POSIX_PATH_LIMIT
-
-
-def _size(text: str) -> int:
-    """Length of *text* in the unit the file system limits it in (UTF-16 units on Windows, else UTF-8 bytes)."""
-    return len(text.encode("utf-16-le")) // 2 if os.name == "nt" else len(text.encode("utf-8"))
-
-
-def fit_name(folder: Path, name: str) -> str:
-    """*name* cut (keeping its extension) so that ``folder / name`` fits the path and file name limits."""
-    room = min(_NAME_LIMIT, path_limit() - _size(str(folder)) - 1)
-    if _size(name) <= room:
-        return name
-    path = Path(name)
-    suffix = path.suffix
-    stem = path.stem
-    room -= _size(suffix)
-    if room < 1:
-        raise DownloadFailed(f"the playlist folder's path leaves no room for a file name: {folder}")
-    while stem and _size(stem) > room:
-        stem = stem[:-1]
-    return f"{stem.rstrip(' .')}{suffix}"
 
 
 def _place(source: Path, target: Path) -> None:

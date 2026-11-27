@@ -11,10 +11,17 @@ import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+from urllib.parse import urlsplit
 
 from spotarchive.backends.base import DownloadFailed
 from spotarchive.session import YouTubeSession
 
+# Windows: MAX_PATH is 260 including the terminating NUL; file names are limited to 255 UTF-16 units.
+_WINDOWS_PATH_LIMIT = 259
+_POSIX_PATH_LIMIT = 4095
+_NAME_LIMIT = 255
+_SPOTIFY_DOMAINS = ("spotify.com", "spotify.link", "spotify.app.link", "spoti.fi", "scdn.co", "spotifycdn.com")
+SPOTIFY_REFUSAL = "Spotarchive never downloads audio from Spotify."
 _INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
@@ -37,6 +44,44 @@ def has_deno(executable: str | None) -> bool:
 def safe_name(name: str) -> str:
     """*name* as a file name that works on Windows too."""
     return " ".join(_INVALID_CHARS.sub("_", name).split()) or "song"
+
+
+def path_limit() -> int:
+    """The longest whole path the file system takes."""
+    return _WINDOWS_PATH_LIMIT if os.name == "nt" else _POSIX_PATH_LIMIT
+
+
+def _size(text: str) -> int:
+    """Length of *text* in the unit the file system limits it in (UTF-16 units on Windows, else UTF-8 bytes)."""
+    return len(text.encode("utf-16-le")) // 2 if os.name == "nt" else len(text.encode("utf-8"))
+
+
+def fit_name(folder: Path, name: str, keep: str = "") -> str:
+    """*name* cut (keeping its extension) so that ``folder / name`` fits the path and file name limits.
+
+    *keep* is added in front of the extension and is never cut either.
+    """
+    path = Path(name)
+    suffix = keep + path.suffix
+    stem = path.stem
+    room = min(_NAME_LIMIT, path_limit() - _size(str(folder)) - 1)
+    if _size(stem + suffix) <= room:
+        return stem + suffix
+    room -= _size(suffix)
+    if room < 1:
+        raise DownloadFailed(f"the playlist folder's path leaves no room for a file name: {folder}")
+    while stem and _size(stem) > room:
+        stem = stem[:-1]
+    return f"{stem.rstrip(' .')}{suffix}"
+
+
+def is_spotify_url(url: str) -> bool:
+    """Whether *url* points to Spotify, which nothing is ever downloaded from."""
+    try:
+        host = (urlsplit(url.strip()).hostname or "").rstrip(".")
+    except ValueError:
+        return False
+    return any(host == domain or host.endswith(f".{domain}") for domain in _SPOTIFY_DOMAINS)
 
 
 @contextmanager

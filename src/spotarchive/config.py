@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from spotarchive.session import DEFAULT_DATA_DIR
+from spotarchive.setlist import IMPORTS_FOLDER, folder_in_data_dir
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -23,7 +24,7 @@ CONFIG_FILENAME = "spotarchive.toml"
 # Where the metadata cleanup takes the tags from.
 METADATA_SOURCES = ("backend", "setlist")
 
-_TOP_LEVEL = {"data_dir", "login", "download", "metadata", "backends"}
+_TOP_LEVEL = {"data_dir", "import_dir", "login", "download", "metadata", "backends"}
 
 
 class ConfigError(Exception):
@@ -36,6 +37,8 @@ class Config:
     path: Path | None = None
     # Relative paths are relative to the current directory.
     data_dir: Path = DEFAULT_DATA_DIR
+    # Where imported links go; a relative path is relative to data_dir.
+    import_dir: Path = Path(IMPORTS_FOLDER)
     # Browser for the login window; "" = first of Chrome, Edge, bundled Chromium.
     login_browser: str = ""
     backend: str = "somedl"
@@ -49,6 +52,11 @@ class Config:
 
     def download_threads(self) -> int:
         return self.threads or default_threads()
+
+    def imports_path(self, data_dir: Path) -> Path:
+        """The folder imported links go to, for the data folder *data_dir*."""
+        # Joining an absolute path replaces data_dir.
+        return data_dir / self.import_dir
 
     def options_for(self, backend: str) -> dict:
         # An empty string means "use the backend's default".
@@ -102,6 +110,10 @@ def parse(raw: dict, path: Path) -> Config:
     config = Config(path=path)
     if "data_dir" in raw:
         config.data_dir = Path(text(raw["data_dir"], "data_dir")).expanduser()
+    if "import_dir" in raw:
+        config.import_dir = Path(text(raw["import_dir"], "import_dir")).expanduser()
+    if folder_in_data_dir(config.data_dir, config.imports_path(config.data_dir)) == "":
+        raise fail("import_dir can't be data_dir or a folder that contains it")
     login = table(raw.get("login", {}), "login", {"browser"})
     if "browser" in login:
         if not isinstance(login["browser"], str):
